@@ -246,7 +246,7 @@ Options:
  -eNIPerf, --enable-ni-performance
     Per-interface RX/TX bandwidth, packet rates, and error rates (perfdata)
  -eNIPort, --enable-ni-port-details
-    Optical transceiver health: rx/tx power, temperature, tx bias, voltage (warn/alarm thresholds)
+    Network interface port and transceiver details: optical rx/tx power, temperature, tx bias, voltage (warn/alarm thresholds)
  -eNINbr, --enable-ni-neighbors
     LLDP neighbor discovery: show connected switch ports per interface (verbose)
  -eOff, --enable-offloads
@@ -822,6 +822,19 @@ CURL_OPTS_JSON="Content-Type: application/json"
 pure_output=""
 pure_problem_output=""
 pure_perf=""
+
+# Global bandwidth formatting helper — used by -eP and -eNIPerf
+_fmt_bandwidth() {
+	echo "${1}" | "${AWK}" -v unit="${bw_unit}" '{
+		if      (unit == "GB")       printf "%.2f GB",  $1/1073741824
+		else if (unit == "MB")       printf "%.2f MB",  $1/1048576
+		else if (unit == "KB")       printf "%.2f KB",  $1/1024
+		else if (unit == "B")        printf "%.2f B",   $1
+		else if ($1>=1073741824)     printf "%.2f GiB", $1/1073741824
+		else if ($1>=1048576)        printf "%.2f MiB", $1/1048576
+		else if ($1>=1024)           printf "%.2f KiB", $1/1024
+		else                         printf "%d B",     $1}'
+}
 
 if [[ -n "${debug}" ]]; then
 	echo "Debugging mode ON." 1>&2
@@ -1436,18 +1449,6 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	if [[ -n "${verbose}" ]]; then
 		pure_output+="I/O Performance:\n---------------------------------------\n"
 	fi
-
-	_fmt_bandwidth() {
-		echo "${1}" | "${AWK}" -v unit="${bw_unit}" '{
-			if      (unit == "GB")       printf "%.2f GB",  $1/1073741824
-			else if (unit == "MB")       printf "%.2f MB",  $1/1048576
-			else if (unit == "KB")       printf "%.2f KB",  $1/1024
-			else if (unit == "B")        printf "%.2f B",   $1
-			else if ($1>=1073741824)     printf "%.2f GiB", $1/1073741824
-			else if ($1>=1048576)        printf "%.2f MiB", $1/1048576
-			else if ($1>=1024)           printf "%.2f KiB", $1/1024
-			else                         printf "%d B",     $1}'
-	}
 
 	_perf_bandwidth() {
 		echo "${1}" | "${AWK}" -v unit="${bw_unit}" '{
@@ -2217,7 +2218,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 		pure_output+="---------------------------------------\n\n"
 	fi
 
-	unset -f _fmt_bandwidth _perf_bandwidth 2>/dev/null
+	unset -f _perf_bandwidth _perf_bw_threshold 2>/dev/null
 fi
 
 # ---------------------------------------------------------------------------
@@ -3017,7 +3018,7 @@ if [[ ( -n "${enable_network}" || -n "${enable_all}" ) && -z "${disable_network}
 
 	if [[ "${_pt_total}" -gt 0 ]]; then
 		if [[ -n "${verbose}" ]]; then
-			pure_output+="Ports:\n---------------------------------------\n"
+			pure_output+="FC / iSCSI / NVMe-oF Ports:\n---------------------------------------\n"
 			for count in "${!pt_name[@]}"; do
 				_pt_id=""
 				_pt_type=""
@@ -3218,14 +3219,14 @@ if [[ ( -n "${enable_ni_perf}" || -n "${enable_all}" ) && -z "${disable_ni_perf}
 fi
 
 # ---------------------------------------------------------------------------
-# Network Interface Port Details Check
+# Network Interface Port and Transceiver Details Check
 # ---------------------------------------------------------------------------
 if [[ ( -n "${enable_ni_port}" || -n "${enable_all}" ) && -z "${disable_ni_port}" ]]; then
 	ni_port_buffer=`${api_cmd_get}/network-interfaces/port-details \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
 	if [[ -n "${verbose}" ]]; then
-		pure_output+="Network Interface Port Details:\n---------------------------------------\n"
+		pure_output+="Network Interface Port and Transceiver Details:\n---------------------------------------\n"
 	fi
 
 	if [[ -n "${ni_port_buffer}" && ! "${ni_port_buffer}" =~ '"errors"' ]]; then
@@ -3297,7 +3298,7 @@ if [[ ( -n "${enable_ni_port}" || -n "${enable_all}" ) && -z "${disable_ni_port}
 			done
 
 			if [[ "${_niport_crit}" -eq 0 && "${_niport_warn}" -eq 0 && -z "${verbose}" ]]; then
-				pure_output+="${status_ok} - NI Port Details ${array_name}: ${_niport_total} ports OK\n"
+				pure_output+="${status_ok} - NI Port and Transceiver Details ${array_name}: ${_niport_total} ports OK\n"
 			fi
 
 			pure_perf+=" ni_port_total=${_niport_total} ni_port_warn=${_niport_warn} ni_port_crit=${_niport_crit}"
