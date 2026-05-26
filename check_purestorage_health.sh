@@ -899,6 +899,7 @@ if [[ -z "${arrays_buffer}" || "${arrays_buffer}" =~ '"errors"' ]]; then
 fi
 
 array_name=`echo "${arrays_buffer}" | "${JQ}" --unbuffered -r '.items[0].name // "unknown"' 2>/dev/null`
+array_version=`echo "${arrays_buffer}" | "${JQ}" --unbuffered -r '.items[0].version // ""' 2>/dev/null`
 
 # Optional: validate array name matches expected
 if [[ -n "${array_filter}" && "${array_name}" != "${array_filter}" ]]; then
@@ -3516,7 +3517,9 @@ if [[ ( -n "${enable_patch}" || -n "${enable_all}" ) && -z "${disable_patch}" ]]
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
 	if [[ -n "${verbose}" ]]; then
-		pure_output+="Software Patches:\n---------------------------------------\n"
+		_patch_ver_s=""
+		[[ -n "${array_version}" ]] && _patch_ver_s=" (current: ${array_version})"
+		pure_output+="Software Patches${_patch_ver_s}:\n---------------------------------------\n"
 	fi
 
 	if [[ -z "${patch_buffer}" || "${patch_buffer}" =~ '"errors"' || "${patch_buffer}" == "null" ]]; then
@@ -3622,7 +3625,9 @@ if [[ ( -n "${enable_sw}" || -n "${enable_all}" ) && -z "${disable_sw}" ]]; then
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
 	if [[ -n "${verbose}" ]]; then
-		pure_output+="Software / Upgrades:\n---------------------------------------\n"
+		_sw_ver_s=""
+		[[ -n "${array_version}" ]] && _sw_ver_s=" (current: ${array_version})"
+		pure_output+="Software / Upgrades${_sw_ver_s}:\n---------------------------------------\n"
 	fi
 
 	if [[ -z "${sw_buffer}" || "${sw_buffer}" =~ '"errors"' || "${sw_buffer}" == "null" ]]; then
