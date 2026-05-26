@@ -3906,8 +3906,10 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 
 	pod_name=(    `echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].name'                              2>/dev/null | "${AWK}" 1 ORS=' '`)
 	pod_status=(  `echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].status // "healthy"'               2>/dev/null | "${AWK}" 1 ORS=' '`)
-	pod_med=(     `echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].mediator.status // "unknown"'      2>/dev/null | "${AWK}" 1 ORS=' '`)
-	pod_med_addr=(`echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].mediator.address // ""'            2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pod_med=(     `echo "${pods_buffer}" | "${JQ}" --unbuffered -r --arg arr "${array_name}" \
+	               '.items[] | (first(.arrays[] | select(.name == $arr) | .mediator_status) // .arrays[0].mediator_status // "unknown")' \
+	               2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pod_med_addr=(`echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].mediator // ""'                    2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	_pod_total=0
 	_pod_unhealthy=0
