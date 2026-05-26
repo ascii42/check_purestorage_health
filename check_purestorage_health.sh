@@ -3555,7 +3555,7 @@ if [[ ( -n "${enable_patch}" || -n "${enable_all}" ) && -z "${disable_patch}" ]]
 					(.description // ""),
 					((.progress // 0) * 100 | floor | tostring),
 					((.ha_reduction_required // false) | tostring),
-					((.upgrade_hops // []) | join(" -> "))
+					((.upgrade_hops // []) | if type == "array" then join(" -> ") else (. // "") end)
 				] | join("\t")' 2>/dev/null)
 
 			_patch_warn=0
@@ -3661,7 +3661,7 @@ if [[ ( -n "${enable_sw}" || -n "${enable_all}" ) && -z "${disable_sw}" ]]; then
 					 elif $s == "partially_installed" then "crit"
 					 else "warn" end),
 					((.progress // 0) * 100 | floor | tostring),
-					((.upgrade_hops // []) | join(" -> "))
+					((.upgrade_hops // []) | if type == "array" then join(" -> ") else (. // "") end)
 				] | join("\t")' 2>/dev/null)
 
 			_sw_warn=0
