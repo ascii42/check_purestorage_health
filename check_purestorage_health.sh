@@ -16,15 +16,15 @@
 # Release: 2.6.0
 #   Add software patches check (-ePatch): /software-patches/catalog + /software-versions (verbose)
 #   Add software/upgrade check (-eSW): /software + /software-check (verbose)
-#   Both: null/empty response → OK (not mandatory); status mapped to warn/crit per documented table
-#   Patches: installed/not_applicable → OK; download_failed/failed → CRIT; all others → WARN
-#   Software: installed/new → OK; download_failed/failed/aborting/abort/canceled/partially_installed → CRIT; others → WARN
+#   Both: null/empty response -> OK (not mandatory); status mapped to warn/crit per documented table
+#   Patches: installed/not_applicable -> OK; download_failed/failed -> CRIT; all others -> WARN
+#   Software: installed/new -> OK; download_failed/failed/aborting/abort/canceled/partially_installed -> CRIT; others -> WARN
 #
 # 2026-05-23 Felix Longardt <monitoring@longardt.com>
 # Release: 2.5.0
 #   Add offloads check (-eOff): /offloads — status, space, protocol detail per target
-#   Null/empty response → OK (offloads not mandatory)
-#   connected/scanning → OK; connecting/disconnecting → WARN; not connected → CRIT
+#   Null/empty response -> OK (offloads not mandatory)
+#   connected/scanning -> OK; connecting/disconnecting -> WARN; not connected -> CRIT
 #   Protocol detail: NFS address:mountpoint, S3 uri/bucket, Azure account/container, GCS bucket
 #
 # 2026-05-23 Felix Longardt <monitoring@longardt.com>
@@ -33,11 +33,11 @@
 #     Per-interface RX/TX bandwidth, packet rates, error rates; ETH and FC support
 #   Network: add /network-interfaces/port-details (-eNIPort)
 #     Optical transceiver health: rx/tx power, temperature, tx bias, voltage
-#     tx_fault=true → CRIT; status alarm → CRIT; status warn → WARN
+#     tx_fault=true -> CRIT; status alarm -> CRIT; status warn -> WARN
 #   Network: add /network-interfaces/neighbors (-eNINbr)
-#     LLDP neighbor discovery: local port → switch name + switch port (verbose)
+#     LLDP neighbor discovery: local port -> switch name + switch port (verbose)
 #   Fix snapshot transfer empty Progress/Transferred/Written values
-#     Replace parallel mapfile calls with single jq→awk TSV pipeline (guaranteed field alignment)
+#     Replace parallel mapfile calls with single jq->awk TSV pipeline (guaranteed field alignment)
 #
 # 2026-05-22 Felix Longardt <monitoring@longardt.com>
 # Release: 2.3.0
@@ -2441,7 +2441,7 @@ if [[ ( -n "${enable_snaps_xfer}" || -n "${enable_all}" ) && -z "${disable_snaps
 			pure_output+="${status_ok} - Snapshot Transfers ${array_name}: ${_vxfer_count} active Data: ${_vxfer_dtotal_h} Written: ${_vxfer_pbwtotal_h}\n"
 			pure_perf+=" vol_snap_transfers=${_vxfer_count} vol_snap_data_transferred=${_vxfer_dtotal}B vol_snap_physical_written=${_vxfer_pbwtotal}B"
 
-			# per-transfer: single jq→awk pipeline (one TSV line per item, guaranteed alignment)
+			# per-transfer: single jq->awk pipeline (one TSV line per item, guaranteed alignment)
 			declare -a _vxfer_name _vxfer_safe _vxfer_prog_pct _vxfer_prog_raw \
 			           _vxfer_data_h _vxfer_data_raw _vxfer_pbw_h _vxfer_pbw_raw
 			while IFS=$'\t' read -r _tf_name _tf_prog_pct _tf_prog_raw _tf_data_h _tf_data_raw _tf_pbw_h _tf_pbw_raw; do
@@ -3254,7 +3254,7 @@ if [[ ( -n "${enable_off}" || -n "${enable_all}" ) && -z "${disable_off}" ]]; th
 		pure_output+="Offloads:\n---------------------------------------\n"
 	fi
 
-	# null/empty/error → OK (offloads are optional)
+	# null/empty/error -> OK (offloads are optional)
 	if [[ -z "${off_buffer}" || "${off_buffer}" =~ '"errors"' || "${off_buffer}" == "null" ]]; then
 		if [[ -n "${verbose}" ]]; then
 			pure_output+="${status_ok} - Offloads ${array_name}: none configured\n"
@@ -3487,7 +3487,7 @@ if [[ ( -n "${enable_patch}" || -n "${enable_all}" ) && -z "${disable_patch}" ]]
 						(.name // ""),
 						(.version // ""),
 						(.release_family // ""),
-						((.upgrade_hops // []) | join(" → "))
+						((.upgrade_hops // []) | join(" -> "))
 					] | join("\t")' 2>/dev/null)
 			fi
 		fi
@@ -3546,7 +3546,7 @@ if [[ ( -n "${enable_sw}" || -n "${enable_all}" ) && -z "${disable_sw}" ]]; then
 					 elif $s == "partially_installed" then "crit"
 					 else "warn" end),
 					((.progress // 0) * 100 | floor | tostring),
-					((.upgrade_hops // []) | join(" → "))
+					((.upgrade_hops // []) | join(" -> "))
 				] | join("\t")' 2>/dev/null)
 
 			_sw_warn=0
