@@ -6,6 +6,20 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-05-26 Felix Longardt <monitoring@longardt.com>
+# Release: 2.8.0
+#   -eNIPerf: add interface line-speed from /network-interfaces; calculate RX/TX
+#             utilisation as % of line speed; --warn-ni-bw (default 80%) and
+#             --crit-ni-bw (default 90%) thresholds; perfdata includes
+#             warn/crit/max in bytes/sec per interface
+#   -eNIPerf: add --warn-ni-errors (default 1) / --crit-ni-errors (default 10)
+#             thresholds for errors/sec per interface
+#   Replace all unicode -> arrows with ASCII ->
+#   -ePatch: extract version and upgrade_hops from catalog items directly;
+#            show upgrade path only when patch is not installed/not_applicable;
+#            remove redundant /software-versions call (versions in catalog)
+#   -eSW: show upgrade path only when software item is not in ok state
+#
 # 2026-05-23 Felix Longardt <monitoring@longardt.com>
 # Release: 2.7.0
 #   Add syslog-servers check (-eSyslog): /syslog-servers — URI presence check with strict/non-strict mode
@@ -91,7 +105,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.7.0"
+REVISION="2.8.0"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -312,6 +326,16 @@ Options:
     Comma-separated list of volume names to check exclusively (e.g. vol1,vol2)
  --blacklist-nics <list>
     Comma-separated list of NIC names to skip entirely (e.g. eth88,eth89)
+ --warn-ni-bw <pct>
+    WARNING threshold for per-interface RX or TX utilisation in %% of line speed
+    (default: 80)
+ --crit-ni-bw <pct>
+    CRITICAL threshold for per-interface RX or TX utilisation in %% of line speed
+    (default: 90)
+ --warn-ni-errors <n>
+    WARNING threshold for per-interface errors/sec (default: 1)
+ --crit-ni-errors <n>
+    CRITICAL threshold for per-interface errors/sec (default: 10)
  -u,  --bw-unit  <unit>
     Bandwidth display unit: auto | B | KB | MB | GB (default: auto)
  --perfdata
@@ -645,6 +669,26 @@ while [[ -n "${1}" ]]; do
 		shift
 		ni_blacklist="${1}"
 		;;
+	--warn-ni-bw)
+		shift
+		warn_ni_bw="${1}"
+		[[ "${warn_ni_bw}" =~ ^[0-9]+$ ]] || exit_unknown "--warn-ni-bw requires an integer"
+		;;
+	--crit-ni-bw)
+		shift
+		crit_ni_bw="${1}"
+		[[ "${crit_ni_bw}" =~ ^[0-9]+$ ]] || exit_unknown "--crit-ni-bw requires an integer"
+		;;
+	--warn-ni-errors)
+		shift
+		warn_ni_errors="${1}"
+		[[ "${warn_ni_errors}" =~ ^[0-9]+$ ]] || exit_unknown "--warn-ni-errors requires an integer"
+		;;
+	--crit-ni-errors)
+		shift
+		crit_ni_errors="${1}"
+		[[ "${crit_ni_errors}" =~ ^[0-9]+$ ]] || exit_unknown "--crit-ni-errors requires an integer"
+		;;
 	-eNIPerf|--enable-ni-performance)
 		enable_ni_perf=1
 		;;
@@ -756,9 +800,13 @@ done
 [[ -z "${crit_cert}" ]] && crit_cert=15
 [[ -z "${warn_sub}" ]]  && warn_sub=30
 [[ -z "${crit_sub}" ]]  && crit_sub=15
-[[ -z "${warn_vol}" ]]  && warn_vol=80
-[[ -z "${crit_vol}" ]]  && crit_vol=90
-[[ -z "${bw_unit}" ]]   && bw_unit="auto"
+[[ -z "${warn_vol}" ]]   && warn_vol=80
+[[ -z "${crit_vol}" ]]   && crit_vol=90
+[[ -z "${warn_ni_bw}" ]]     && warn_ni_bw=80
+[[ -z "${crit_ni_bw}" ]]     && crit_ni_bw=90
+[[ -z "${warn_ni_errors}" ]] && warn_ni_errors=1
+[[ -z "${crit_ni_errors}" ]] && crit_ni_errors=10
+[[ -z "${bw_unit}" ]]    && bw_unit="auto"
 
 # Status labels
 status_ok="[OK]"
@@ -3006,6 +3054,9 @@ fi
 if [[ ( -n "${enable_ni_perf}" || -n "${enable_all}" ) && -z "${disable_ni_perf}" ]]; then
 	ni_perf_buffer=`${api_cmd_get}/network-interfaces/performance \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
+	# Fetch interface config for line speed
+	ni_speed_buffer=`${api_cmd_get}/network-interfaces \
+		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
 	if [[ -n "${verbose}" ]]; then
 		pure_output+="Network Interface Performance:\n---------------------------------------\n"
@@ -3015,17 +3066,26 @@ if [[ ( -n "${enable_ni_perf}" || -n "${enable_all}" ) && -z "${disable_ni_perf}
 		_niperf_total=`echo "${ni_perf_buffer}" | "${JQ}" --unbuffered '.items | length' 2>/dev/null`
 
 		if [[ "${_niperf_total:-0}" -gt 0 ]]; then
-			# rebuild NIC blacklist map if needed
+			# Build blacklist map
 			declare -A _nip_bl_map
 			if [[ -n "${ni_blacklist}" ]]; then
 				IFS=',' read -ra _nip_bl_arr <<< "${ni_blacklist}"
 				for _nip_bl_e in "${_nip_bl_arr[@]}"; do _nip_bl_map["${_nip_bl_e}"]=1; done
 			fi
 
-			declare -a _nip_name _nip_safe _nip_type _nip_rxb _nip_txb _nip_rxp _nip_txp \
-			           _nip_err _nip_rxb_h _nip_txb_h
+			# Build speed lookup map: name -> speed in bits/sec
+			declare -A _nip_speed_map
+			while IFS=$'\t' read -r _ns_name _ns_speed; do
+				_nip_speed_map["${_ns_name}"]="${_ns_speed}"
+			done < <(echo "${ni_speed_buffer}" | "${JQ}" --unbuffered -r '
+				.items[] | [
+					(.name // ""),
+					((.speed // 0) | tostring)
+				] | join("\t")' 2>/dev/null)
 
-			while IFS=$'\t' read -r _nf_name _nf_type _nf_rxb _nf_txb _nf_rxp _nf_txp _nf_err _nf_rxb_h _nf_txb_h; do
+			declare -a _nip_name _nip_safe _nip_type _nip_rxb _nip_txb _nip_rxp _nip_txp _nip_err
+
+			while IFS=$'\t' read -r _nf_name _nf_type _nf_rxb _nf_txb _nf_rxp _nf_txp _nf_err; do
 				_nip_name+=("${_nf_name}")
 				_nip_safe+=("${_nf_name//[.\/: -]/_}")
 				_nip_type+=("${_nf_type}")
@@ -3034,8 +3094,6 @@ if [[ ( -n "${enable_ni_perf}" || -n "${enable_all}" ) && -z "${disable_ni_perf}
 				_nip_rxp+=("${_nf_rxp}")
 				_nip_txp+=("${_nf_txp}")
 				_nip_err+=("${_nf_err}")
-				_nip_rxb_h+=("${_nf_rxb_h}")
-				_nip_txb_h+=("${_nf_txb_h}")
 			done < <(echo "${ni_perf_buffer}" | "${JQ}" --unbuffered -r '
 				.items[] | [
 					(.name // "unknown"),
@@ -3055,30 +3113,100 @@ if [[ ( -n "${enable_ni_perf}" || -n "${enable_all}" ) && -z "${disable_ni_perf}
 					(if .interface_type == "fc"
 						then (.fc.total_errors_per_sec // 0)
 						else (.eth.total_errors_per_sec // 0) end | tostring)
-				] | join("\t")' 2>/dev/null \
-				| "${AWK}" 'BEGIN{FS=OFS="\t"}
-				function fmtbw(n) { n+=0; if(n>=1073741824) return sprintf("%.2f GB/s",n/1073741824); else if(n>=1048576) return sprintf("%.2f MB/s",n/1048576); else if(n>=1024) return sprintf("%.0f KB/s",n/1024); else return sprintf("%d B/s",n) }
-				{ print $1,$2,$3,$4,$5,$6,$7,fmtbw($3+0),fmtbw($4+0) }')
+				] | join("\t")' 2>/dev/null)
+
+			_nip_warn=0
+			_nip_crit=0
 
 			for count in "${!_nip_name[@]}"; do
 				_nipn="${_nip_name[count]}"
 				[[ -n "${_nip_bl_map[${_nipn}]}" ]] && continue
 
-				pure_perf+=" ni_${_nip_safe[count]}_rx_bps=${_nip_rxb[count]}B"
-				pure_perf+=" ni_${_nip_safe[count]}_tx_bps=${_nip_txb[count]}B"
-				pure_perf+=" ni_${_nip_safe[count]}_errors_per_sec=${_nip_err[count]}"
+				_nip_spd="${_nip_speed_map[${_nipn}]:-0}"  # bits/sec from config
+				_nip_rxb_v="${_nip_rxb[count]}"
+				_nip_txb_v="${_nip_txb[count]}"
 
-				if [[ -n "${verbose}" ]]; then
-					pure_output+="${status_ok} - NI Perf ${array_name}/${_nipn} (${_nip_type[count]}): RX: ${_nip_rxb_h[count]} TX: ${_nip_txb_h[count]} RX-pkt: ${_nip_rxp[count]}/s TX-pkt: ${_nip_txp[count]}/s Errors: ${_nip_err[count]}/s\n"
+				# Human-readable bandwidth
+				_nip_rxb_h=`_fmt_bandwidth "${_nip_rxb_v}"`
+				_nip_txb_h=`_fmt_bandwidth "${_nip_txb_v}"`
+
+				# Line speed display and utilisation calculation
+				_nip_spd_h=""
+				_nip_rx_pct=0
+				_nip_tx_pct=0
+				_nip_rx_warn_b=0
+				_nip_rx_crit_b=0
+				_nip_tx_warn_b=0
+				_nip_tx_crit_b=0
+				_nip_max_b=0
+
+				if [[ "${_nip_spd}" -gt 0 ]] 2>/dev/null; then
+					# speed is in bits/sec; convert to bytes/sec for comparison
+					_nip_max_b=$(( _nip_spd / 8 ))
+					_nip_rx_pct=`echo "${_nip_rxb_v} ${_nip_max_b}" | "${AWK}" '{if($2>0) printf "%d",$1*100/$2; else print 0}'`
+					_nip_tx_pct=`echo "${_nip_txb_v} ${_nip_max_b}" | "${AWK}" '{if($2>0) printf "%d",$1*100/$2; else print 0}'`
+					_nip_rx_warn_b=`echo "${_nip_max_b} ${warn_ni_bw}" | "${AWK}" '{printf "%d",$1*$2/100}'`
+					_nip_rx_crit_b=`echo "${_nip_max_b} ${crit_ni_bw}" | "${AWK}" '{printf "%d",$1*$2/100}'`
+					_nip_tx_warn_b="${_nip_rx_warn_b}"
+					_nip_tx_crit_b="${_nip_rx_crit_b}"
+					_nip_spd_h=`echo "${_nip_spd}" | "${AWK}" '{if($1>=1000000000) printf "%.0f Gbit/s",$1/1000000000; else if($1>=1000000) printf "%.0f Mbit/s",$1/1000000; else printf "%d bit/s",$1}'`
+				fi
+
+				# Perfdata with thresholds and max
+				pure_perf+=" ni_${_nip_safe[count]}_rx_bps=${_nip_rxb_v}B;${_nip_rx_warn_b};${_nip_rx_crit_b};0;${_nip_max_b}"
+				pure_perf+=" ni_${_nip_safe[count]}_tx_bps=${_nip_txb_v}B;${_nip_tx_warn_b};${_nip_tx_crit_b};0;${_nip_max_b}"
+				pure_perf+=" ni_${_nip_safe[count]}_errors_per_sec=${_nip_err[count]};${warn_ni_errors};${crit_ni_errors}"
+
+				# Threshold evaluation — bandwidth utilisation
+				_nip_state="${status_ok}"
+				_nip_dir=""
+				if [[ "${_nip_spd}" -gt 0 ]] 2>/dev/null; then
+					if (( _nip_rx_pct >= crit_ni_bw || _nip_tx_pct >= crit_ni_bw )) 2>/dev/null; then
+						_nip_state="${status_crit}"
+						[[ "${_nip_rx_pct}" -ge "${crit_ni_bw}" ]] && _nip_dir+=" RX:${_nip_rx_pct}%"
+						[[ "${_nip_tx_pct}" -ge "${crit_ni_bw}" ]] && _nip_dir+=" TX:${_nip_tx_pct}%"
+						pure_problem_output+="${status_crit} - NI Perf ${array_name}/${_nipn}: utilisation CRITICAL${_nip_dir} (threshold: ${crit_ni_bw}%)\n"
+						(( _nip_crit++ ))
+					elif (( _nip_rx_pct >= warn_ni_bw || _nip_tx_pct >= warn_ni_bw )) 2>/dev/null; then
+						_nip_state="${status_warn}"
+						[[ "${_nip_rx_pct}" -ge "${warn_ni_bw}" ]] && _nip_dir+=" RX:${_nip_rx_pct}%"
+						[[ "${_nip_tx_pct}" -ge "${warn_ni_bw}" ]] && _nip_dir+=" TX:${_nip_tx_pct}%"
+						pure_problem_output+="${status_warn} - NI Perf ${array_name}/${_nipn}: utilisation WARNING${_nip_dir} (threshold: ${warn_ni_bw}%)\n"
+						(( _nip_warn++ ))
+					fi
+				fi
+
+				# Threshold evaluation — errors/sec
+				_nip_err_v="${_nip_err[count]}"
+				if "${AWK}" "BEGIN{exit !(${_nip_err_v}+0 >= ${crit_ni_errors}+0)}" 2>/dev/null; then
+					_nip_state="${status_crit}"
+					pure_problem_output+="${status_crit} - NI Perf ${array_name}/${_nipn}: ${_nip_err_v} errors/s CRITICAL (threshold: ${crit_ni_errors})\n"
+					(( _nip_crit++ ))
+				elif "${AWK}" "BEGIN{exit !(${_nip_err_v}+0 >= ${warn_ni_errors}+0)}" 2>/dev/null; then
+					[[ "${_nip_state}" != "${status_crit}" ]] && _nip_state="${status_warn}"
+					pure_problem_output+="${status_warn} - NI Perf ${array_name}/${_nipn}: ${_nip_err_v} errors/s WARNING (threshold: ${warn_ni_errors})\n"
+					(( _nip_warn++ ))
+				fi
+
+				# Per-interface output line
+				_nip_spd_s=""
+				[[ -n "${_nip_spd_h}" ]] && _nip_spd_s=" | Speed: ${_nip_spd_h}"
+				_nip_util_s=""
+				[[ "${_nip_spd}" -gt 0 ]] 2>/dev/null && _nip_util_s=" | RX: ${_nip_rx_pct}% TX: ${_nip_tx_pct}%"
+
+				if [[ "${_nip_state}" != "${status_ok}" ]]; then
+					pure_output+="${_nip_state} - NI Perf ${array_name}/${_nipn} (${_nip_type[count]})${_nip_spd_s}: RX: ${_nip_rxb_h}/s TX: ${_nip_txb_h}/s${_nip_util_s} | Pkts: ${_nip_rxp[count]}/${_nip_txp[count]}/s Err: ${_nip_err[count]}/s\n"
+				elif [[ -n "${verbose}" ]]; then
+					pure_output+="${status_ok} - NI Perf ${array_name}/${_nipn} (${_nip_type[count]})${_nip_spd_s}: RX: ${_nip_rxb_h}/s TX: ${_nip_txb_h}/s${_nip_util_s} | Pkts: ${_nip_rxp[count]}/${_nip_txp[count]}/s Err: ${_nip_err[count]}/s\n"
 				fi
 			done
 
-			if [[ -z "${verbose}" ]]; then
-				pure_output+="${status_ok} - NI Performance ${array_name}: ${_niperf_total} interfaces\n"
+			if [[ -z "${verbose}" && "${_nip_crit}" -eq 0 && "${_nip_warn}" -eq 0 ]]; then
+				pure_output+="${status_ok} - NI Performance ${array_name}: ${_niperf_total} interfaces within thresholds (warn: ${warn_ni_bw}% crit: ${crit_ni_bw}%)\n"
 			fi
 
 			unset _nip_name _nip_safe _nip_type _nip_rxb _nip_txb _nip_rxp _nip_txp \
-			      _nip_err _nip_rxb_h _nip_txb_h _nip_bl_map
+			      _nip_err _nip_bl_map _nip_speed_map
 		fi
 	fi
 
@@ -3086,7 +3214,7 @@ if [[ ( -n "${enable_ni_perf}" || -n "${enable_all}" ) && -z "${disable_ni_perf}
 		pure_output+="---------------------------------------\n\n"
 	fi
 
-	unset ni_perf_buffer
+	unset ni_perf_buffer ni_speed_buffer
 fi
 
 # ---------------------------------------------------------------------------
@@ -3402,27 +3530,31 @@ if [[ ( -n "${enable_patch}" || -n "${enable_all}" ) && -z "${disable_patch}" ]]
 				pure_output+="${status_ok} - Software Patches ${array_name}: none available\n"
 			fi
 		else
-			declare -a _pat_name _pat_status _pat_state _pat_desc _pat_pct _pat_ha
+			declare -a _pat_name _pat_ver _pat_status _pat_state _pat_desc _pat_pct _pat_ha _pat_hops
 
-			while IFS=$'\t' read -r _pn _ps _pst _pd _pp _pha; do
+			while IFS=$'\t' read -r _pn _pv _ps _pst _pd _pp _pha _ph; do
 				_pat_name+=("${_pn}")
+				_pat_ver+=("${_pv}")
 				_pat_status+=("${_ps}")
 				_pat_state+=("${_pst}")
 				_pat_desc+=("${_pd}")
 				_pat_pct+=("${_pp}")
 				_pat_ha+=("${_pha}")
+				_pat_hops+=("${_ph}")
 			done < <(echo "${patch_buffer}" | "${JQ}" --unbuffered -r '
-				.items[] | [
+				.items[] | (.status // "") as $s | [
 					(.name // "unknown"),
-					(.status // ""),
-					(if   .status == "installed"       then "ok"
-					 elif .status == "not_applicable"  then "ok"
-					 elif .status == "download_failed" then "crit"
-					 elif .status == "failed"          then "crit"
+					(.version // ""),
+					$s,
+					(if   $s == "installed"       then "ok"
+					 elif $s == "not_applicable"  then "ok"
+					 elif $s == "download_failed" then "crit"
+					 elif $s == "failed"          then "crit"
 					 else "warn" end),
 					(.description // ""),
 					((.progress // 0) * 100 | floor | tostring),
-					((.ha_reduction_required // false) | tostring)
+					((.ha_reduction_required // false) | tostring),
+					((.upgrade_hops // []) | join(" -> "))
 				] | join("\t")' 2>/dev/null)
 
 			_patch_warn=0
@@ -3434,10 +3566,15 @@ if [[ ( -n "${enable_patch}" || -n "${enable_all}" ) && -z "${disable_patch}" ]]
 				_pstate="${_pat_state[count]}"
 				_pst="${_pat_status[count]}"
 
-				_pat_detail=" | ${_pst}"
+				_pat_detail=""
+				[[ -n "${_pat_ver[count]}" ]] && _pat_detail+=" v${_pat_ver[count]}"
+				_pat_detail+=" | ${_pst}"
 				[[ "${_pat_pct[count]}" != "0" ]] && _pat_detail+=" ${_pat_pct[count]}%"
 				[[ -n "${_pat_desc[count]}" ]] && _pat_detail+=" | ${_pat_desc[count]}"
 				[[ "${_pat_ha[count]}" == "true" ]] && _pat_detail+=" | HA reduction required"
+				# Only show upgrade path when patch is available (not already installed)
+				[[ "${_pstate}" != "ok" && -n "${_pat_hops[count]}" ]] && \
+					_pat_detail+=" | path: ${_pat_hops[count]}"
 
 				case "${_pstate}" in
 				crit)
@@ -3465,34 +3602,11 @@ if [[ ( -n "${enable_patch}" || -n "${enable_all}" ) && -z "${disable_patch}" ]]
 
 			pure_perf+=" patch_total=${_patch_total} patch_ok=${_patch_ok} patch_warn=${_patch_warn} patch_crit=${_patch_crit}"
 
-			unset _pat_name _pat_status _pat_state _pat_desc _pat_pct _pat_ha
+			unset _pat_name _pat_ver _pat_status _pat_state _pat_desc _pat_pct _pat_ha _pat_hops
 		fi
 	fi
 
-	# Verbose: show current software versions
 	if [[ -n "${verbose}" ]]; then
-		swver_buffer=`${api_cmd_get}/software-versions \
-			-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
-
-		if [[ -n "${swver_buffer}" && ! "${swver_buffer}" =~ '"errors"' && "${swver_buffer}" != "null" ]]; then
-			_swver_total=`echo "${swver_buffer}" | "${JQ}" --unbuffered '.items | length' 2>/dev/null`
-			if [[ "${_swver_total:-0}" -gt 0 ]]; then
-				pure_output+="Software Versions:\n"
-				while IFS=$'\t' read -r _sv_name _sv_ver _sv_family _sv_hops; do
-					_sv_hop_s=""
-					[[ -n "${_sv_hops}" ]] && _sv_hop_s=" | upgrade path: ${_sv_hops}"
-					pure_output+="${status_ok} - Version ${array_name}/${_sv_name}: ${_sv_ver} (family: ${_sv_family})${_sv_hop_s}\n"
-				done < <(echo "${swver_buffer}" | "${JQ}" --unbuffered -r '
-					.items[] | [
-						(.name // ""),
-						(.version // ""),
-						(.release_family // ""),
-						((.upgrade_hops // []) | join(" -> "))
-					] | join("\t")' 2>/dev/null)
-			fi
-		fi
-		unset swver_buffer
-
 		pure_output+="---------------------------------------\n\n"
 	fi
 
@@ -3560,7 +3674,9 @@ if [[ ( -n "${enable_sw}" || -n "${enable_all}" ) && -z "${disable_sw}" ]]; then
 
 				_sw_detail=" v${_sw_ver[count]} | ${_swst}"
 				[[ "${_sw_pct[count]}" != "0" ]] && _sw_detail+=" ${_sw_pct[count]}%"
-				[[ -n "${_sw_hops[count]}" ]] && _sw_detail+=" | path: ${_sw_hops[count]}"
+				# Only show upgrade path when not already at target version
+				[[ "${_swstate}" != "ok" && -n "${_sw_hops[count]}" ]] && \
+					_sw_detail+=" | path: ${_sw_hops[count]}"
 
 				case "${_swstate}" in
 				crit)
