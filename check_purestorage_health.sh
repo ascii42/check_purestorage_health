@@ -3902,11 +3902,12 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 	fi
 
 	# --- Pods (ActiveCluster) ---
-	declare -a pod_name pod_status pod_med
+	declare -a pod_name pod_status pod_med pod_med_addr
 
-	pod_name=(  `echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].name'                         2>/dev/null | "${AWK}" 1 ORS=' '`)
-	pod_status=(`echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].status // "healthy"'          2>/dev/null | "${AWK}" 1 ORS=' '`)
-	pod_med=(   `echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].mediator_status // "unknown"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pod_name=(    `echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].name'                              2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pod_status=(  `echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].status // "healthy"'               2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pod_med=(     `echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].mediator.status // "unknown"'      2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pod_med_addr=(`echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].mediator.address // ""'            2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	_pod_total=0
 	_pod_unhealthy=0
@@ -3930,7 +3931,9 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 				pure_output+="${status_warn} - Pod ${array_name}/${pod_name[count]}: mediator DISCONNECTED\n"
 				pure_problem_output+="${status_warn} - Pod ${array_name}/${pod_name[count]}: mediator DISCONNECTED\n"
 			elif [[ -n "${verbose}" ]]; then
-				pure_output+="${status_ok} - Pod ${array_name}/${pod_name[count]}: ${_pstatus} | mediator: ${_pmed}\n"
+				_pmed_addr_s=""
+				[[ -n "${pod_med_addr[count]}" ]] && _pmed_addr_s=" (${pod_med_addr[count]})"
+				pure_output+="${status_ok} - Pod ${array_name}/${pod_name[count]}: ${_pstatus} | mediator: ${_pmed}${_pmed_addr_s}\n"
 			fi
 		fi
 
@@ -3943,7 +3946,7 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 	fi
 
 	pure_perf+=" pods_total=${_pod_total} pods_unhealthy=${_pod_unhealthy}"
-	unset pod_name pod_status pod_med
+	unset pod_name pod_status pod_med pod_med_addr
 
 	# --- Array connections ---
 	declare -a ac_remote ac_status ac_type ac_transport
