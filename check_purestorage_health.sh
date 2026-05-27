@@ -3142,27 +3142,47 @@ if [[ ( -n "${enable_ni_perf}" || -n "${enable_all}" ) && -z "${disable_ni_perf}
 				_nip_tx_crit_b=0
 				_nip_max_b=0
 
+				_nip_bw_valid=0
 				if [[ "${_nip_spd}" -gt 0 ]] 2>/dev/null; then
 					# speed is in bits/sec; convert to bytes/sec for comparison
 					_nip_max_b=$(( _nip_spd / 8 ))
-					_nip_rx_pct=`echo "${_nip_rxb_v} ${_nip_max_b}" | "${AWK}" '{if($2>0) printf "%d",$1*100/$2; else print 0}'`
-					_nip_tx_pct=`echo "${_nip_txb_v} ${_nip_max_b}" | "${AWK}" '{if($2>0) printf "%d",$1*100/$2; else print 0}'`
-					_nip_rx_warn_b=`echo "${_nip_max_b} ${warn_ni_bw}" | "${AWK}" '{printf "%d",$1*$2/100}'`
-					_nip_rx_crit_b=`echo "${_nip_max_b} ${crit_ni_bw}" | "${AWK}" '{printf "%d",$1*$2/100}'`
-					_nip_tx_warn_b="${_nip_rx_warn_b}"
-					_nip_tx_crit_b="${_nip_rx_crit_b}"
-					_nip_spd_h=`echo "${_nip_spd}" | "${AWK}" '{if($1>=1000000000) printf "%.0f Gbit/s",$1/1000000000; else if($1>=1000000) printf "%.0f Mbit/s",$1/1000000; else printf "%d bit/s",$1}'`
+					# Reject implausibly small max_b — speed reported as plain Gbps integer
+					if [[ "${_nip_max_b}" -lt 1000000 ]]; then
+						_nip_spd=0
+						_nip_max_b=0
+					else
+						_nip_spd_h=`echo "${_nip_spd}" | "${AWK}" '{if($1>=1000000000) printf "%.0f Gbit/s",$1/1000000000; else if($1>=1000000) printf "%.0f Mbit/s",$1/1000000; else printf "%d bit/s",$1}'`
+						# Only compute utilisation % when both byte values are within the
+						# physical line rate. The API occasionally returns spike values
+						# orders of magnitude above the real rate — discard those silently.
+						if "${AWK}" "BEGIN{exit !(${_nip_rxb_v}+0<=${_nip_max_b} && ${_nip_txb_v}+0<=${_nip_max_b})}" 2>/dev/null; then
+							_nip_bw_valid=1
+							_nip_rx_pct=`echo "${_nip_rxb_v} ${_nip_max_b}" | "${AWK}" '{if($2>0) printf "%d",$1*100/$2; else print 0}'`
+							_nip_tx_pct=`echo "${_nip_txb_v} ${_nip_max_b}" | "${AWK}" '{if($2>0) printf "%d",$1*100/$2; else print 0}'`
+							_nip_rx_warn_b=`echo "${_nip_max_b} ${warn_ni_bw}" | "${AWK}" '{printf "%d",$1*$2/100}'`
+							_nip_rx_crit_b=`echo "${_nip_max_b} ${crit_ni_bw}" | "${AWK}" '{printf "%d",$1*$2/100}'`
+							_nip_tx_warn_b="${_nip_rx_warn_b}"
+							_nip_tx_crit_b="${_nip_rx_crit_b}"
+						fi
+					fi
 				fi
 
-				# Perfdata with thresholds and max
-				pure_perf+=" ni_${_nip_safe[count]}_rx_bps=${_nip_rxb_v}B;${_nip_rx_warn_b};${_nip_rx_crit_b};0;${_nip_max_b}"
-				pure_perf+=" ni_${_nip_safe[count]}_tx_bps=${_nip_txb_v}B;${_nip_tx_warn_b};${_nip_tx_crit_b};0;${_nip_max_b}"
+				# Perfdata — cap spike values at 0 so monitoring graphs aren't distorted.
+				# A spike is: speed is known (max_b>0) but bytes exceed the physical line rate.
+				_nip_perf_rx="${_nip_rxb_v}"
+				_nip_perf_tx="${_nip_txb_v}"
+				if [[ "${_nip_max_b}" -gt 0 && "${_nip_bw_valid}" -eq 0 ]]; then
+					_nip_perf_rx=0
+					_nip_perf_tx=0
+				fi
+				pure_perf+=" ni_${_nip_safe[count]}_rx_bps=${_nip_perf_rx}B;${_nip_rx_warn_b};${_nip_rx_crit_b};0;${_nip_max_b}"
+				pure_perf+=" ni_${_nip_safe[count]}_tx_bps=${_nip_perf_tx}B;${_nip_tx_warn_b};${_nip_tx_crit_b};0;${_nip_max_b}"
 				pure_perf+=" ni_${_nip_safe[count]}_errors_per_sec=${_nip_err[count]};${warn_ni_errors};${crit_ni_errors}"
 
 				# Threshold evaluation — bandwidth utilisation
 				_nip_state="${status_ok}"
 				_nip_dir=""
-				if [[ "${_nip_spd}" -gt 0 ]] 2>/dev/null; then
+				if [[ "${_nip_bw_valid}" -eq 1 ]]; then
 					if (( _nip_rx_pct >= crit_ni_bw || _nip_tx_pct >= crit_ni_bw )) 2>/dev/null; then
 						_nip_state="${status_crit}"
 						[[ "${_nip_rx_pct}" -ge "${crit_ni_bw}" ]] && _nip_dir+=" RX:${_nip_rx_pct}%"
@@ -3194,12 +3214,14 @@ if [[ ( -n "${enable_ni_perf}" || -n "${enable_all}" ) && -z "${disable_ni_perf}
 				_nip_spd_s=""
 				[[ -n "${_nip_spd_h}" ]] && _nip_spd_s=" | Speed: ${_nip_spd_h}"
 				_nip_util_s=""
-				[[ "${_nip_spd}" -gt 0 ]] 2>/dev/null && _nip_util_s=" | RX: ${_nip_rx_pct}% TX: ${_nip_tx_pct}%"
+				[[ "${_nip_bw_valid}" -eq 1 ]] && _nip_util_s=" | RX: ${_nip_rx_pct}% TX: ${_nip_tx_pct}%"
 
+				_nip_rxb_disp=`_fmt_bandwidth "${_nip_perf_rx}"`
+				_nip_txb_disp=`_fmt_bandwidth "${_nip_perf_tx}"`
 				if [[ "${_nip_state}" != "${status_ok}" ]]; then
-					pure_output+="${_nip_state} - NI Perf ${array_name}/${_nipn} (${_nip_type[count]})${_nip_spd_s}: RX: ${_nip_rxb_h}/s TX: ${_nip_txb_h}/s${_nip_util_s} | Pkts: ${_nip_rxp[count]}/${_nip_txp[count]}/s Err: ${_nip_err[count]}/s\n"
+					pure_output+="${_nip_state} - NI Perf ${array_name}/${_nipn} (${_nip_type[count]})${_nip_spd_s}: RX: ${_nip_rxb_disp}/s TX: ${_nip_txb_disp}/s${_nip_util_s} | Pkts: ${_nip_rxp[count]}/${_nip_txp[count]}/s Err: ${_nip_err[count]}/s\n"
 				elif [[ -n "${verbose}" ]]; then
-					pure_output+="${status_ok} - NI Perf ${array_name}/${_nipn} (${_nip_type[count]})${_nip_spd_s}: RX: ${_nip_rxb_h}/s TX: ${_nip_txb_h}/s${_nip_util_s} | Pkts: ${_nip_rxp[count]}/${_nip_txp[count]}/s Err: ${_nip_err[count]}/s\n"
+					pure_output+="${status_ok} - NI Perf ${array_name}/${_nipn} (${_nip_type[count]})${_nip_spd_s}: RX: ${_nip_rxb_disp}/s TX: ${_nip_txb_disp}/s${_nip_util_s} | Pkts: ${_nip_rxp[count]}/${_nip_txp[count]}/s Err: ${_nip_err[count]}/s\n"
 				fi
 			done
 
