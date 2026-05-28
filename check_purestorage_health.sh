@@ -6,6 +6,14 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-05-28 Felix Longardt <monitoring@longardt.com>
+# Release: 2.8.2
+#   -ePerf: remove PERF_LOAD/load_metric — field does not exist in REST API v2;
+#           removed from output line and perfdata (was always 0)
+#   -eMetrics: fix verbose section showing empty between delimiters; null/U metrics
+#              now display "(no data)" in verbose; add fallback line when history
+#              endpoint returns no items
+#
 # 2026-05-27 Felix Longardt <monitoring@longardt.com>
 # Release: 2.8.1
 #   -eNIPerf: add --no-ni-spike-guard option to bypass FC/ETH bandwidth plausibility
@@ -115,7 +123,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.8.0"
+REVISION="2.8.2"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -131,8 +139,6 @@ PERF_READ_LAT="usec_per_read_op"
 PERF_WRITE_LAT="usec_per_write_op"
 PERF_MIRROR_LAT="usec_per_mirrored_write_op"
 PERF_QUEUE="queue_depth"
-PERF_LOAD="load_metric"
-
 
 exit_unknown() {
 	echo "Unknown parameter: ${1}"
@@ -1505,7 +1511,6 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 		_w_lat=`echo "${perf_arr_buffer}" | "${JQ}" --unbuffered -r ".items[0].${PERF_WRITE_LAT} // 0"`
 		_mw_lat=`echo "${perf_arr_buffer}" | "${JQ}" --unbuffered -r ".items[0].${PERF_MIRROR_LAT} // 0"`
 		_queue=`echo "${perf_arr_buffer}" | "${JQ}" --unbuffered -r ".items[0].${PERF_QUEUE} // 0"`
-		_load=`echo "${perf_arr_buffer}" | "${JQ}" --unbuffered -r ".items[0].${PERF_LOAD} // 0"`
 
 		_total_iops=`echo "${_r_iops} ${_w_iops}" | "${AWK}" '{print $1+$2}'`
 		_r_bandwidth_h=`_fmt_bandwidth "${_r_bandwidth}"`
@@ -1514,7 +1519,6 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 		_r_lat_ms=`echo "${_r_lat}"   | "${AWK}" '{printf "%.3f ms",$1/1000}'`
 		_w_lat_ms=`echo "${_w_lat}"   | "${AWK}" '{printf "%.3f ms",$1/1000}'`
 		_mw_lat_ms=`echo "${_mw_lat}" | "${AWK}" '{printf "%.3f ms",$1/1000}'`
-		_load_s=`echo "${_load}" | "${AWK}" '{printf "%.1f",$1}'`
 
 		# threshold evaluation — IOPS
 		_perf_state="${status_ok}"
@@ -1559,7 +1563,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 		pure_output+="${_perf_state} - Performance ${array_name}: IOPS: ${_total_iops} (R:${_r_iops} W:${_w_iops})"
 		pure_output+=" Bandwidth: R:${_r_bandwidth_h}/s W:${_w_bandwidth_h}/s"
 		pure_output+=" Latency: R:${_r_lat_ms} W:${_w_lat_ms}"
-		pure_output+=" Queue: ${_queue} Load: ${_load_s}%\n"
+		pure_output+=" Queue: ${_queue}\n"
 
 		_mw_active=`echo "${_mw_iops}" | "${AWK}" '{print ($1>0)?1:0}'`
 		if [[ "${_mw_active}" == "1" ]]; then
@@ -1586,7 +1590,6 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 		pure_perf+=" ${array_name}_write_latency=${_w_lat}us;${_plat_w};${_plat_c};0;"
 		pure_perf+=" ${array_name}_mirror_write_latency=${_mw_lat}us"
 		pure_perf+=" ${array_name}_queue_depth=${_queue}"
-		pure_perf+=" ${array_name}_load=${_load_s}%"
 		# FlashBlade-style fields from same endpoint (0 on FlashArray)
 		_fb_r_bandwidth=`echo "${perf_arr_buffer}" | "${JQ}" --unbuffered -r ".items[0].read_bytes_per_sec // 0"`
 		_fb_w_bandwidth=`echo "${perf_arr_buffer}" | "${JQ}" --unbuffered -r ".items[0].write_bytes_per_sec // 0"`
@@ -4635,6 +4638,9 @@ if [[ ( -n "${enable_metrics}" || -n "${enable_all}" ) && -z "${disable_metrics}
 			if [[ "${_mv}" == "U" || "${_mv}" == "null" ]]; then
 				(( _met_null++ ))
 				pure_perf+=" metric_${_perf_label}=U"
+				if [[ -n "${verbose}" ]]; then
+					pure_output+="${status_ok} - Metric ${_mn}: (no data)\n"
+				fi
 			else
 				(( _met_ok++ ))
 				case "${_mu}" in
@@ -4649,6 +4655,10 @@ if [[ ( -n "${enable_metrics}" || -n "${enable_all}" ) && -z "${disable_metrics}
 				fi
 			fi
 		done
+
+		if [[ -n "${verbose}" && "${_met_ok}" -eq 0 && "${_met_null}" -eq 0 ]]; then
+			pure_output+="${status_ok} - Metrics: no history data returned\n"
+		fi
 
 		if [[ -z "${verbose}" ]]; then
 			pure_output+="${status_ok} - Metrics: ${_met_ok} metric(s) collected, ${_met_null} without data\n"
