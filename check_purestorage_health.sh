@@ -872,7 +872,7 @@ fi
 if [[ -z "${api_version}" ]]; then
 	_ver_resp=`${CURL} --insecure --silent --max-time 10 "https://${array_host}/api/api_version"`
 	api_version=`echo "${_ver_resp}" | "${JQ}" --unbuffered -r \
-		'[.version[] | select(startswith("2."))] | last // "2.x"' 2>/dev/null`
+		'[(.version // .versions)[] | select(startswith("2."))] | last // "2.x"' 2>/dev/null`
 	[[ -z "${api_version}" || "${api_version}" == "null" ]] && api_version="2.x"
 	_v1_ver=`echo "${_ver_resp}" | "${JQ}" --unbuffered -r \
 		'[.version[] | select(startswith("1."))] | last // "1.latest"' 2>/dev/null`
