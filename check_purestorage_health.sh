@@ -6,6 +6,11 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-08-11 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.1
+#   -eDi: show no-quota directories in non-verbose mode too (remove verbose guard
+#          around "used (no quota)" line so they are always visible)
+#
 # 2026-08-10 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.0
 #   -eDi: fix AWK division-by-zero errors — space.capacity is FlashBlade-only;
@@ -136,7 +141,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.9.0"
+REVISION="2.9.1"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -2715,9 +2720,7 @@ if [[ ( -n "${enable_dirs}" || -n "${enable_all}" ) && -z "${disable_dirs}" ]]; 
 			else                        printf "%d B",$1}'`
 
 		if [[ "${_cap}" == "0" || "${_cap}" == "null" || -z "${_cap}" ]]; then
-			if [[ -n "${verbose}" ]]; then
-				pure_output+="${status_ok} - Directory ${array_name}/${di_name[count]}: ${_used_h} used (no quota)\n"
-			fi
+			pure_output+="${status_ok} - Directory ${array_name}/${di_name[count]}: ${_used_h} used (no quota)\n"
 			pure_perf+=" dir_${_safe_di}_used=${_used}B"
 			continue
 		fi
