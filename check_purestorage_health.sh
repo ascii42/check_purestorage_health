@@ -7,6 +7,12 @@
 #
 # Version history:
 # 2026-08-11 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.2
+#   -eDr: fix empty-bay detection — PureStorage reports empty bays as type "-"
+#          with status "unused"; now detected by type "-" and excluded from
+#          total/healthy counters (were counting as 28/28 instead of 20/20)
+#
+# 2026-08-11 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.1
 #   -eDi: show no-quota directories in non-verbose mode too (remove verbose guard
 #          around "used (no quota)" line so they are always visible)
@@ -141,7 +147,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.9.1"
+REVISION="2.9.2"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -1356,7 +1362,16 @@ if [[ ( -n "${enable_drives}" || -n "${enable_all}" ) && -z "${disable_drives}" 
 
 	for count in "${!dr_name[@]}"; do
 		_dstat="${dr_status[count]}"
-		_dlabel="${dr_name[count]} (${dr_type[count]})"
+		_dtype="${dr_type[count]}"
+		_dlabel="${dr_name[count]} (${_dtype})"
+
+		# Empty bay: type "-" means no drive installed — exclude from counts
+		if [[ "${_dtype}" == "-" ]]; then
+			if [[ -n "${verbose}" ]]; then
+				pure_output+="${status_ok} - Drive ${array_name}: ${_dlabel} ${_dstat}\n"
+			fi
+			continue
+		fi
 
 		case "${_dstat}" in
 		failed|missing|unhealthy)
@@ -1369,12 +1384,7 @@ if [[ ( -n "${enable_drives}" || -n "${enable_all}" ) && -z "${disable_drives}" 
 			pure_problem_output+="${status_warn} - Drive ${array_name}: ${_dlabel} ${_dstat^^}\n"
 			(( _dr_total++ )); (( _dr_warn++ ))
 			;;
-		empty)
-			if [[ -n "${verbose}" ]]; then
-				pure_output+="${status_ok} - Drive ${array_name}: ${_dlabel} ${_dstat}\n"
-			fi
-			;;
-		healthy|unused)
+		empty|healthy|unused)
 			(( _dr_total++ )); (( _dr_healthy++ ))
 			if [[ -n "${verbose}" ]]; then
 				pure_output+="${status_ok} - Drive ${array_name}: ${_dlabel} ${_dstat}\n"
