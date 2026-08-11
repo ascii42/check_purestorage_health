@@ -6,6 +6,30 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-08-11 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.2
+#   -eDr: fix empty-bay detection — PureStorage reports empty bays as type "-"
+#          with status "unused"; now detected by type "-" and excluded from
+#          total/healthy counters (were counting as 28/28 instead of 20/20)
+#
+# 2026-08-11 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.1
+#   -eDi: show no-quota directories in non-verbose mode too (remove verbose guard
+#          around "used (no quota)" line so they are always visible)
+#
+# 2026-08-10 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.0
+#   -eDi: fix AWK division-by-zero errors — space.capacity is FlashBlade-only;
+#          use space.total_provisioned for directory quota on FlashArray
+#   -eDi: add -z guard so empty JQ array entries are treated as "no quota"
+#          instead of causing division by zero
+#   -eDr: exclude empty bays (status "empty") from drive total and healthy
+#          counters; non-verbose summary now reflects only installed drives
+#
+# 2026-07-25 Dominic Ernst
+# Release: 2.8.3
+#   version-fix for Flashblades
+#
 # 2026-05-28 Felix Longardt <monitoring@longardt.com>
 # Release: 2.8.2
 #   -ePerf: remove PERF_LOAD/load_metric — field does not exist in REST API v2;
@@ -123,7 +147,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.8.2"
+REVISION="2.9.2"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -1337,23 +1361,31 @@ if [[ ( -n "${enable_drives}" || -n "${enable_all}" ) && -z "${disable_drives}" 
 	_dr_unkn=0
 
 	for count in "${!dr_name[@]}"; do
-		(( _dr_total++ ))
 		_dstat="${dr_status[count]}"
-		_dlabel="${dr_name[count]} (${dr_type[count]})"
+		_dtype="${dr_type[count]}"
+		_dlabel="${dr_name[count]} (${_dtype})"
+
+		# Empty bay: type "-" means no drive installed — exclude from counts
+		if [[ "${_dtype}" == "-" ]]; then
+			if [[ -n "${verbose}" ]]; then
+				pure_output+="${status_ok} - Drive ${array_name}: ${_dlabel} ${_dstat}\n"
+			fi
+			continue
+		fi
 
 		case "${_dstat}" in
 		failed|missing|unhealthy)
 			pure_output+="${status_crit} - Drive ${array_name}: ${_dlabel} ${_dstat^^}\n"
 			pure_problem_output+="${status_crit} - Drive ${array_name}: ${_dlabel} ${_dstat^^}\n"
-			(( _dr_crit++ ))
+			(( _dr_total++ )); (( _dr_crit++ ))
 			;;
 		identifying|recovering|unadmitted|updating)
 			pure_output+="${status_warn} - Drive ${array_name}: ${_dlabel} ${_dstat^^}\n"
 			pure_problem_output+="${status_warn} - Drive ${array_name}: ${_dlabel} ${_dstat^^}\n"
-			(( _dr_warn++ ))
+			(( _dr_total++ )); (( _dr_warn++ ))
 			;;
 		empty|healthy|unused)
-			(( _dr_healthy++ ))
+			(( _dr_total++ )); (( _dr_healthy++ ))
 			if [[ -n "${verbose}" ]]; then
 				pure_output+="${status_ok} - Drive ${array_name}: ${_dlabel} ${_dstat}\n"
 			fi
@@ -1361,7 +1393,7 @@ if [[ ( -n "${enable_drives}" || -n "${enable_all}" ) && -z "${disable_drives}" 
 		*)
 			pure_output+="${status_unkn} - Drive ${array_name}: ${_dlabel} unrecognized status: ${_dstat}\n"
 			pure_problem_output+="${status_unkn} - Drive ${array_name}: ${_dlabel} unrecognized status: ${_dstat}\n"
-			(( _dr_unkn++ ))
+			(( _dr_total++ )); (( _dr_unkn++ ))
 			;;
 		esac
 	done
@@ -2683,7 +2715,7 @@ if [[ ( -n "${enable_dirs}" || -n "${enable_all}" ) && -z "${disable_dirs}" ]]; 
 	declare -a di_name di_cap di_used
 
 	di_name=(`echo "${dirs_buffer}" | "${JQ}" --unbuffered -r '.items[].name'                      2>/dev/null | "${AWK}" 1 ORS=' '`)
-	di_cap=( `echo "${dirs_buffer}" | "${JQ}" --unbuffered -r '.items[].space.capacity // 0'       2>/dev/null | "${AWK}" 1 ORS=' '`)
+	di_cap=( `echo "${dirs_buffer}" | "${JQ}" --unbuffered -r '.items[].space.total_provisioned // 0' 2>/dev/null | "${AWK}" 1 ORS=' '`)
 	di_used=(`echo "${dirs_buffer}" | "${JQ}" --unbuffered -r '.items[].space.total_physical // 0' 2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	for count in "${!di_name[@]}"; do
@@ -2697,10 +2729,8 @@ if [[ ( -n "${enable_dirs}" || -n "${enable_all}" ) && -z "${disable_dirs}" ]]; 
 			else if ($1>=1048576)       printf "%.2f MiB",$1/1048576
 			else                        printf "%d B",$1}'`
 
-		if [[ "${_cap}" == "0" || "${_cap}" == "null" ]]; then
-			if [[ -n "${verbose}" ]]; then
-				pure_output+="${status_ok} - Directory ${array_name}/${di_name[count]}: ${_used_h} used (no quota)\n"
-			fi
+		if [[ "${_cap}" == "0" || "${_cap}" == "null" || -z "${_cap}" ]]; then
+			pure_output+="${status_ok} - Directory ${array_name}/${di_name[count]}: ${_used_h} used (no quota)\n"
 			pure_perf+=" dir_${_safe_di}_used=${_used}B"
 			continue
 		fi
