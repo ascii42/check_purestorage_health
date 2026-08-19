@@ -6,6 +6,13 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-08-17 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.5
+#   fix: login now tries /api/login (unversioned) first, then falls back to
+#        /api/{version}/login; FlashBlade requires the unversioned path (versioned
+#        path resolves token in remote-arrays context causing 403), FlashArray
+#        requires the versioned path — fallback covers both array types
+#
 # 2026-08-17 Dominic Ernst
 # Release: 2.9.4
 #   fix: login endpoint changed from /api/{version}/login to /api/login
@@ -13,7 +20,6 @@
 #        versioned path caused the token to be resolved in the remote-arrays
 #        context (ps-fa01 connection) instead of as a local user session,
 #        resulting in 403 Access Denied on all subsequent API calls
-#        FlashArray accepts both paths, so this change is backwards-compatible
 #
 # 2026-08-17 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.3
@@ -168,7 +174,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.9.4"
+REVISION="2.9.5"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -944,11 +950,18 @@ if [[ -z "${x_auth_token}" ]]; then
 		fi
 	fi
 
-	# FlashBlade requires /api/login (unversioned); FlashArray accepts both.
+	# FlashBlade requires unversioned /api/login; FlashArray requires /api/{version}/login.
+	# Try unversioned first; fall back to versioned for FlashArray.
 	x_auth_token=`${CURL} --insecure --silent --max-time 30 -X POST \
 		"https://${array_host}/api/login" \
 		-H "api-token: ${api_token}" \
 		-i | "${AWK}" 'tolower($0) ~ /^x-auth-token:/ {sub(/^[^:]*:[[:space:]]*/,""); gsub(/\r/,""); print; exit}'`
+	if [[ -z "${x_auth_token}" ]]; then
+		x_auth_token=`${CURL} --insecure --silent --max-time 30 -X POST \
+			"${ARRAY_API}/login" \
+			-H "api-token: ${api_token}" \
+			-i | "${AWK}" 'tolower($0) ~ /^x-auth-token:/ {sub(/^[^:]*:[[:space:]]*/,""); gsub(/\r/,""); print; exit}'`
+	fi
 
 	if [[ -z "${x_auth_token}" ]]; then
 		echo "${status_unkn} - Login to ${array_host} failed — check host, credentials and API version"
