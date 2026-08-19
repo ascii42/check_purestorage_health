@@ -6,6 +6,27 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-08-17 Dominic Ernst
+# Release: 2.9.4
+#   fix: login endpoint changed from /api/{version}/login to /api/login
+#        (unversioned); FlashBlade only accepts the unversioned path — using the
+#        versioned path caused the token to be resolved in the remote-arrays
+#        context (ps-fa01 connection) instead of as a local user session,
+#        resulting in 403 Access Denied on all subsequent API calls
+#        FlashArray accepts both paths, so this change is backwards-compatible
+#
+# 2026-08-17 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.3
+#   fix: FlashBlade API returns "error" key (no 's'); all error checks used
+#        '"errors"' pattern so 403/access-denied responses were not detected
+#        and the script continued with empty data — changed pattern to '"error'
+#        (prefix match) which catches both "error" and "errors" keys
+#   fix: /arrays error now outputs [CRITICAL] with the API error message and
+#        exits 2 instead of silent UNKNOWN after processing empty data
+#   fix: _perf_bandwidth function was unset after -ePerf block but still called
+#        in array-connections replication section (lines ~4269-4283);
+#        moved unset to after last usage
+#
 # 2026-08-11 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.2
 #   -eDr: fix empty-bay detection — PureStorage reports empty bays as type "-"
@@ -147,7 +168,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.9.2"
+REVISION="2.9.4"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -923,8 +944,9 @@ if [[ -z "${x_auth_token}" ]]; then
 		fi
 	fi
 
+	# FlashBlade requires /api/login (unversioned); FlashArray accepts both.
 	x_auth_token=`${CURL} --insecure --silent --max-time 30 -X POST \
-		"${ARRAY_API}/login" \
+		"https://${array_host}/api/login" \
 		-H "api-token: ${api_token}" \
 		-i | "${AWK}" 'tolower($0) ~ /^x-auth-token:/ {sub(/^[^:]*:[[:space:]]*/,""); gsub(/\r/,""); print; exit}'`
 
@@ -942,9 +964,11 @@ CURL_OPTS_AUTH="x-auth-token: ${x_auth_token}"
 arrays_buffer=`${api_cmd_get}/arrays \
 	-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-if [[ -z "${arrays_buffer}" || "${arrays_buffer}" =~ '"errors"' ]]; then
-	echo "${status_unkn} - Failed to retrieve array info from ${array_host}"
-	exit 4
+if [[ -z "${arrays_buffer}" || "${arrays_buffer}" =~ '"error' ]]; then
+	_api_err=`echo "${arrays_buffer}" | "${JQ}" --unbuffered -r \
+		'(.error[0].message // .errors[0].message // "no response") + " (code: " + ((.error[0].code // .errors[0].code // "?") | tostring) + ")"' 2>/dev/null`
+	echo "${status_crit} - Cannot connect to ${array_host}: ${_api_err:-no response}"
+	exit 2
 fi
 
 array_name=`echo "${arrays_buffer}" | "${JQ}" --unbuffered -r '.items[0].name // "unknown"' 2>/dev/null`
@@ -1000,11 +1024,11 @@ if [[ ( -n "${enable_arrays}" || -n "${enable_all}" ) && -z "${disable_arrays}" 
 		_tz_list_buf=`${api_cmd_get}/arrays/supported-time-zones \
 			-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 		_tz_valid=""
-		if [[ -n "${_tz_list_buf}" && ! "${_tz_list_buf}" =~ '"errors"' ]]; then
+		if [[ -n "${_tz_list_buf}" && ! "${_tz_list_buf}" =~ '"error' ]]; then
 			_tz_valid=`echo "${_tz_list_buf}" | "${JQ}" --unbuffered -r \
 				--arg tz "${check_tz}" '(.items // [])[] | select(.name == $tz) | .name' 2>/dev/null`
 		fi
-		if [[ -n "${_tz_list_buf}" && ! "${_tz_list_buf}" =~ '"errors"' && -z "${_tz_valid}" ]]; then
+		if [[ -n "${_tz_list_buf}" && ! "${_tz_list_buf}" =~ '"error' && -z "${_tz_valid}" ]]; then
 			pure_output+="${status_unkn} - Array ${array_name}: '${check_tz}' is not a supported timezone\n"
 			pure_problem_output+="${status_unkn} - Array ${array_name}: '${check_tz}' is not a supported timezone\n"
 		elif [[ "${_ar_tz}" == "${check_tz}" ]]; then
@@ -1532,7 +1556,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	perf_arr_buffer=`${api_cmd_get}/arrays/performance \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${perf_arr_buffer}" && ! "${perf_arr_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${perf_arr_buffer}" && ! "${perf_arr_buffer}" =~ '"error' ]]; then
 		_r_iops=`echo "${perf_arr_buffer}" | "${JQ}" --unbuffered -r ".items[0].${PERF_READ_IOPS} // 0"`
 		_w_iops=`echo "${perf_arr_buffer}" | "${JQ}" --unbuffered -r ".items[0].${PERF_WRITE_IOPS} // 0"`
 		_mw_iops=`echo "${perf_arr_buffer}" | "${JQ}" --unbuffered -r ".items[0].${PERF_MIRROR_IOPS} // 0"`
@@ -1643,7 +1667,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	perf_repl_perf_buffer=`${api_cmd_get}/arrays/performance/replication \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${perf_repl_perf_buffer}" && ! "${perf_repl_perf_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${perf_repl_perf_buffer}" && ! "${perf_repl_perf_buffer}" =~ '"error' ]]; then
 		declare -a rp_remote
 
 		rp_remote=(`echo "${perf_repl_perf_buffer}" | "${JQ}" --unbuffered -r \
@@ -1671,7 +1695,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	perf_fs_buffer=`${api_cmd_get}/file-systems/performance \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${perf_fs_buffer}" && ! "${perf_fs_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${perf_fs_buffer}" && ! "${perf_fs_buffer}" =~ '"error' ]]; then
 		declare -a fsp_name
 
 		fsp_name=(`echo "${perf_fs_buffer}" | "${JQ}" --unbuffered -r '(.items // [])[] | .name' 2>/dev/null | "${AWK}" 1 ORS=' '`)
@@ -1747,7 +1771,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	perf_fsg_buffer=`${api_cmd_get}/file-systems/groups/performance \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${perf_fsg_buffer}" && ! "${perf_fsg_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${perf_fsg_buffer}" && ! "${perf_fsg_buffer}" =~ '"error' ]]; then
 		declare -a fsg_fs_name fsg_grp_name
 
 		fsg_fs_name=( `echo "${perf_fsg_buffer}" | "${JQ}" --unbuffered -r \
@@ -1827,7 +1851,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	perf_fsu_buffer=`${api_cmd_get}/file-systems/users/performance \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${perf_fsu_buffer}" && ! "${perf_fsu_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${perf_fsu_buffer}" && ! "${perf_fsu_buffer}" =~ '"error' ]]; then
 		declare -a fsu_fs_name fsu_user_name
 
 		fsu_fs_name=( `echo "${perf_fsu_buffer}" | "${JQ}" --unbuffered -r \
@@ -1907,7 +1931,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	perf_bu_buffer=`${api_cmd_get}/buckets/performance \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${perf_bu_buffer}" && ! "${perf_bu_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${perf_bu_buffer}" && ! "${perf_bu_buffer}" =~ '"error' ]]; then
 		declare -a bup_name
 
 		bup_name=(`echo "${perf_bu_buffer}" | "${JQ}" --unbuffered -r '(.items // [])[] | .name' 2>/dev/null | "${AWK}" 1 ORS=' '`)
@@ -1951,7 +1975,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	perf_bus3_buffer=`${api_cmd_get}/buckets/s3-specific-performance \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${perf_bus3_buffer}" && ! "${perf_bus3_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${perf_bus3_buffer}" && ! "${perf_bus3_buffer}" =~ '"error' ]]; then
 		declare -a bus3_name
 
 		bus3_name=(`echo "${perf_bus3_buffer}" | "${JQ}" --unbuffered -r '(.items // [])[] | .name' 2>/dev/null | "${AWK}" 1 ORS=' '`)
@@ -2020,7 +2044,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	perf_http_buffer=`${api_cmd_get}/arrays/http-specific-performance \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${perf_http_buffer}" && ! "${perf_http_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${perf_http_buffer}" && ! "${perf_http_buffer}" =~ '"error' ]]; then
 		_http_cnt=`echo "${perf_http_buffer}" | "${JQ}" --unbuffered -r '(.items // []) | length' 2>/dev/null`
 		if [[ "${_http_cnt}" -gt 0 ]]; then
 			_http_rd_files=`echo "${perf_http_buffer}" | "${JQ}" --unbuffered -r '.items[0].read_files_per_sec // 0'`
@@ -2057,7 +2081,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	perf_nfs_buffer=`${api_cmd_get}/arrays/nfs-specific-performance \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${perf_nfs_buffer}" && ! "${perf_nfs_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${perf_nfs_buffer}" && ! "${perf_nfs_buffer}" =~ '"error' ]]; then
 		_nfs_cnt=`echo "${perf_nfs_buffer}" | "${JQ}" --unbuffered -r '(.items // []) | length' 2>/dev/null`
 		if [[ "${_nfs_cnt}" -gt 0 ]]; then
 			_nfs_reads=`echo "${perf_nfs_buffer}" | "${JQ}" --unbuffered -r '.items[0].reads_per_sec // 0'`
@@ -2161,7 +2185,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	perf_cli_buffer=`${api_cmd_get}/arrays/clients/performance \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${perf_cli_buffer}" && ! "${perf_cli_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${perf_cli_buffer}" && ! "${perf_cli_buffer}" =~ '"error' ]]; then
 		declare -a cli_name
 
 		cli_name=(`echo "${perf_cli_buffer}" | "${JQ}" --unbuffered -r '(.items // [])[] | .name' 2>/dev/null | "${AWK}" 1 ORS=' '`)
@@ -2236,7 +2260,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 	perf_s3_buffer=`${api_cmd_get}/arrays/s3-specific-performance \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${perf_s3_buffer}" && ! "${perf_s3_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${perf_s3_buffer}" && ! "${perf_s3_buffer}" =~ '"error' ]]; then
 		_s3_cnt=`echo "${perf_s3_buffer}" | "${JQ}" --unbuffered -r '(.items // []) | length' 2>/dev/null`
 		if [[ "${_s3_cnt}" -gt 0 ]]; then
 			_s3_rd_obj=`echo "${perf_s3_buffer}" | "${JQ}" --unbuffered -r '.items[0].read_objects_per_sec // 0'`
@@ -2273,7 +2297,7 @@ if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; 
 		pure_output+="---------------------------------------\n\n"
 	fi
 
-	unset -f _perf_bandwidth _perf_bw_threshold 2>/dev/null
+	unset -f _perf_bw_threshold 2>/dev/null
 fi
 
 # ---------------------------------------------------------------------------
@@ -2300,7 +2324,7 @@ if [[ ( -n "${enable_vol}" || -n "${enable_all}" ) && -z "${disable_vol}" ]]; th
 	fi
 
 	# --- Space totals ---
-	if [[ -n "${vol_space_buffer}" && ! "${vol_space_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${vol_space_buffer}" && ! "${vol_space_buffer}" =~ '"error' ]]; then
 		_vt_provisioned=`echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.total[0].space.total_provisioned // 0' 2>/dev/null`
 		_vt_physical=`echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.total[0].space.total_physical // 0' 2>/dev/null`
 		_vt_unique=`echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.total[0].space.unique // 0' 2>/dev/null`
@@ -2339,7 +2363,7 @@ if [[ ( -n "${enable_vol}" || -n "${enable_all}" ) && -z "${disable_vol}" ]]; th
 	fi
 
 	# --- Performance totals ---
-	if [[ -n "${vol_perf_buffer}" && ! "${vol_perf_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${vol_perf_buffer}" && ! "${vol_perf_buffer}" =~ '"error' ]]; then
 		_vp_r_iops=`echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.total[0].reads_per_sec // 0' 2>/dev/null`
 		_vp_w_iops=`echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.total[0].writes_per_sec // 0' 2>/dev/null`
 		_vp_r_bw=`echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.total[0].read_bytes_per_sec // 0' 2>/dev/null`
@@ -2371,7 +2395,7 @@ if [[ ( -n "${enable_vol}" || -n "${enable_all}" ) && -z "${disable_vol}" ]]; th
 	# --- Per-volume (threshold check + optional verbose detail) ---
 	# Batch-populate all arrays upfront (one jq call per field, one awk pass per format).
 	# The inner loop then does only array lookups — zero subshell spawns per volume.
-	if [[ -n "${vol_space_buffer}" && ! "${vol_space_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${vol_space_buffer}" && ! "${vol_space_buffer}" =~ '"error' ]]; then
 		declare -a _pvol_name _pvol_safe _pvol_prov _pvol_phys _pvol_dr _pvol_snap
 		declare -a _pvol_prov_h _pvol_phys_h _pvol_snap_h _pvol_dr_s _pvol_pct _pvol_state
 
@@ -2395,7 +2419,7 @@ if [[ ( -n "${enable_vol}" || -n "${enable_all}" ) && -z "${disable_vol}" ]]; th
 
 		declare -a _pvol_tiops _pvol_riops _pvol_wiops _pvol_rbw_h _pvol_wbw_h _pvol_rlat_ms _pvol_wlat_ms
 		_pvol_has_perf=""
-		if [[ -n "${vol_perf_buffer}" && ! "${vol_perf_buffer}" =~ '"errors"' ]]; then
+		if [[ -n "${vol_perf_buffer}" && ! "${vol_perf_buffer}" =~ '"error' ]]; then
 			declare -a _pvol_rlat _pvol_wlat
 			mapfile -t _pvol_riops  < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[].reads_per_sec // 0' 2>/dev/null)
 			mapfile -t _pvol_wiops  < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[].writes_per_sec // 0' 2>/dev/null)
@@ -2476,7 +2500,7 @@ if [[ ( -n "${enable_snaps}" || -n "${enable_all}" ) && -z "${disable_snaps}" ]]
 		pure_output+="Volume Snapshots:\n---------------------------------------\n"
 	fi
 
-	if [[ -n "${vol_snap_buffer}" && ! "${vol_snap_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${vol_snap_buffer}" && ! "${vol_snap_buffer}" =~ '"error' ]]; then
 		_size_fmt='{if($1>=1099511627776) printf "%.2f TiB\n",$1/1099511627776; else if($1>=1073741824) printf "%.2f GiB\n",$1/1073741824; else if($1>=1048576) printf "%.2f MiB\n",$1/1048576; else printf "%d B\n",$1}'
 
 		_vsnap_count=`echo "${vol_snap_buffer}" | "${JQ}" --unbuffered '.items | length' 2>/dev/null`
@@ -2532,7 +2556,7 @@ if [[ ( -n "${enable_snaps_xfer}" || -n "${enable_all}" ) && -z "${disable_snaps
 		pure_output+="Snapshot Transfers:\n---------------------------------------\n"
 	fi
 
-	if [[ -n "${vol_snap_xfer_buffer}" && ! "${vol_snap_xfer_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${vol_snap_xfer_buffer}" && ! "${vol_snap_xfer_buffer}" =~ '"error' ]]; then
 		_size_fmt='{if($1>=1099511627776) printf "%.2f TiB\n",$1/1099511627776; else if($1>=1073741824) printf "%.2f GiB\n",$1/1073741824; else if($1>=1048576) printf "%.2f MiB\n",$1/1048576; else printf "%d B\n",$1}'
 
 		_vxfer_count=`echo "${vol_snap_xfer_buffer}" | "${JQ}" --unbuffered '.items | length' 2>/dev/null`
@@ -2901,7 +2925,7 @@ if [[ ( -n "${enable_quotas}" || -n "${enable_all}" ) && -z "${disable_quotas}" 
 	for _qtype in group user; do
 		_qbuf=`${api_cmd_get}/quotas/${_qtype}s \
 			-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
-		[[ -z "${_qbuf}" || "${_qbuf}" =~ '"errors"' ]] && continue
+		[[ -z "${_qbuf}" || "${_qbuf}" =~ '"error' ]] && continue
 
 		declare -a _qname _qlimit _qused _qdir
 
@@ -3116,7 +3140,7 @@ if [[ ( -n "${enable_ni_perf}" || -n "${enable_all}" ) && -z "${disable_ni_perf}
 		pure_output+="Network Interface Performance:\n---------------------------------------\n"
 	fi
 
-	if [[ -n "${ni_perf_buffer}" && ! "${ni_perf_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${ni_perf_buffer}" && ! "${ni_perf_buffer}" =~ '"error' ]]; then
 		_niperf_total=`echo "${ni_perf_buffer}" | "${JQ}" --unbuffered '.items | length' 2>/dev/null`
 
 		if [[ "${_niperf_total:-0}" -gt 0 ]]; then
@@ -3307,7 +3331,7 @@ if [[ ( -n "${enable_ni_port}" || -n "${enable_all}" ) && -z "${disable_ni_port}
 		pure_output+="Network Interface Port and Transceiver Details:\n---------------------------------------\n"
 	fi
 
-	if [[ -n "${ni_port_buffer}" && ! "${ni_port_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${ni_port_buffer}" && ! "${ni_port_buffer}" =~ '"error' ]]; then
 		_niport_total=`echo "${ni_port_buffer}" | "${JQ}" --unbuffered '.items | length' 2>/dev/null`
 
 		if [[ "${_niport_total:-0}" -gt 0 ]]; then
@@ -3404,7 +3428,7 @@ if [[ ( -n "${enable_ni_nbr}" || -n "${enable_all}" ) && -z "${disable_ni_nbr}" 
 		pure_output+="Network Interface Neighbors (LLDP):\n---------------------------------------\n"
 	fi
 
-	if [[ -n "${ni_nbr_buffer}" && ! "${ni_nbr_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${ni_nbr_buffer}" && ! "${ni_nbr_buffer}" =~ '"error' ]]; then
 		_ninbr_total=`echo "${ni_nbr_buffer}" | "${JQ}" --unbuffered '.items | length' 2>/dev/null`
 
 		if [[ "${_ninbr_total:-0}" -gt 0 ]]; then
@@ -3462,7 +3486,7 @@ if [[ ( -n "${enable_off}" || -n "${enable_all}" ) && -z "${disable_off}" ]]; th
 	fi
 
 	# null/empty/error -> OK (offloads are optional)
-	if [[ -z "${off_buffer}" || "${off_buffer}" =~ '"errors"' || "${off_buffer}" == "null" ]]; then
+	if [[ -z "${off_buffer}" || "${off_buffer}" =~ '"error' || "${off_buffer}" == "null" ]]; then
 		if [[ -n "${verbose}" ]]; then
 			pure_output+="${status_ok} - Offloads ${array_name}: none configured\n"
 		fi
@@ -3599,7 +3623,7 @@ if [[ ( -n "${enable_patch}" || -n "${enable_all}" ) && -z "${disable_patch}" ]]
 		pure_output+="Software Patches${_patch_ver_s}:\n---------------------------------------\n"
 	fi
 
-	if [[ -z "${patch_buffer}" || "${patch_buffer}" =~ '"errors"' || "${patch_buffer}" == "null" ]]; then
+	if [[ -z "${patch_buffer}" || "${patch_buffer}" =~ '"error' || "${patch_buffer}" == "null" ]]; then
 		if [[ -n "${verbose}" ]]; then
 			pure_output+="${status_ok} - Software Patches ${array_name}: none available\n"
 		fi
@@ -3707,7 +3731,7 @@ if [[ ( -n "${enable_sw}" || -n "${enable_all}" ) && -z "${disable_sw}" ]]; then
 		pure_output+="Software / Upgrades${_sw_ver_s}:\n---------------------------------------\n"
 	fi
 
-	if [[ -z "${sw_buffer}" || "${sw_buffer}" =~ '"errors"' || "${sw_buffer}" == "null" ]]; then
+	if [[ -z "${sw_buffer}" || "${sw_buffer}" =~ '"error' || "${sw_buffer}" == "null" ]]; then
 		if [[ -n "${verbose}" ]]; then
 			pure_output+="${status_ok} - Software ${array_name}: no upgrade activity\n"
 		fi
@@ -3796,7 +3820,7 @@ if [[ ( -n "${enable_sw}" || -n "${enable_all}" ) && -z "${disable_sw}" ]]; then
 		swchk_buffer=`${api_cmd_get}/software-check \
 			-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-		if [[ -n "${swchk_buffer}" && ! "${swchk_buffer}" =~ '"errors"' && "${swchk_buffer}" != "null" ]]; then
+		if [[ -n "${swchk_buffer}" && ! "${swchk_buffer}" =~ '"error' && "${swchk_buffer}" != "null" ]]; then
 			_swchk_total=`echo "${swchk_buffer}" | "${JQ}" --unbuffered '.items | length' 2>/dev/null`
 			if [[ "${_swchk_total:-0}" -gt 0 ]]; then
 				pure_output+="Software Pre-checks:\n"
@@ -4068,7 +4092,7 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 	unset ac_remote ac_status ac_type ac_transport
 
 	# --- Pod replica links ---
-	if [[ -n "${rlink_buffer}" && ! "${rlink_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${rlink_buffer}" && ! "${rlink_buffer}" =~ '"error' ]]; then
 		declare -a rl_src rl_dst rl_status rl_lag rl_paused
 
 		while IFS= read -r line; do rl_src+=(   "${line}"); done < <(echo "${rlink_buffer}" | "${JQ}" --unbuffered -r '.items[] | (.sources // [])[0].name // (.sources // [])[0].id // "unknown"' 2>/dev/null)
@@ -4132,7 +4156,7 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 	brl_buffer=`${api_cmd_get}/bucket-replica-links \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${brl_buffer}" && ! "${brl_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${brl_buffer}" && ! "${brl_buffer}" =~ '"error' ]]; then
 		declare -a brl_lbkt brl_rbkt brl_remote brl_status brl_lag brl_dir brl_details
 
 		brl_lbkt=(  `echo "${brl_buffer}" | "${JQ}" --unbuffered -r '(.items // [])[] | .local_bucket.name // "unknown"'  2>/dev/null | "${AWK}" 1 ORS=' '`)
@@ -4189,7 +4213,7 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 	path_buffer=`${api_cmd_get}/array-connections/path \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${path_buffer}" && ! "${path_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${path_buffer}" && ! "${path_buffer}" =~ '"error' ]]; then
 		declare -a cp_remote cp_src cp_dst cp_status cp_details
 
 		cp_remote=(`echo "${path_buffer}" | "${JQ}" --unbuffered -r \
@@ -4249,7 +4273,7 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 	rcp_buffer=`${api_cmd_get}/array-connections/performance/replication \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -n "${rcp_buffer}" && ! "${rcp_buffer}" =~ '"errors"' ]]; then
+	if [[ -n "${rcp_buffer}" && ! "${rcp_buffer}" =~ '"error' ]]; then
 		declare -a rcp_remote
 
 		rcp_remote=(`echo "${rcp_buffer}" | "${JQ}" --unbuffered -r \
@@ -4289,6 +4313,7 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 		pure_output+="---------------------------------------\n\n"
 	fi
 fi
+unset -f _perf_bandwidth 2>/dev/null
 
 # ---------------------------------------------------------------------------
 # Certificate Check
@@ -4495,7 +4520,7 @@ if [[ ( -n "${enable_subs}" || -n "${enable_all}" ) && -z "${disable_subs}" ]]; 
 	subs_buffer=`${api_cmd_get}/subscriptions \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -z "${subs_buffer}" || "${subs_buffer}" =~ '"errors"' || "${subs_buffer}" == 'null' ]]; then
+	if [[ -z "${subs_buffer}" || "${subs_buffer}" =~ '"error' || "${subs_buffer}" == 'null' ]]; then
 		pure_output+="${status_ok} - Subscriptions: none (no additional license installed)\n"
 	else
 
@@ -4612,7 +4637,7 @@ if [[ ( -n "${enable_metrics}" || -n "${enable_all}" ) && -z "${disable_metrics}
 	metrics_catalog_buffer=`${api_cmd_get}"/metrics?resource_types=array" \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
 
-	if [[ -z "${metrics_catalog_buffer}" || "${metrics_catalog_buffer}" =~ '"errors"' ]]; then
+	if [[ -z "${metrics_catalog_buffer}" || "${metrics_catalog_buffer}" =~ '"error' ]]; then
 		pure_output+="${status_ok} - Metrics: endpoint not available on this array (Pure1 cloud API only)\n"
 	else
 
