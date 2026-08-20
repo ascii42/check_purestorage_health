@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Shell Script](https://img.shields.io/badge/Shell-Bash-green.svg)](https://www.gnu.org/software/bash/)
 [![Monitoring](https://img.shields.io/badge/Monitoring-Icinga%2FNagios-blue.svg)](https://icinga.com/)
-[![Version](https://img.shields.io/badge/version-2.8.2-orange.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.9.6-orange.svg)](CHANGELOG.md)
 
 A comprehensive Bash-based monitoring plugin for PureStorage FlashArray and FlashBlade appliances, compatible with Icinga and Nagios monitoring systems. This plugin monitors hardware health, capacity, performance, replication, networking, and more — directly via the PureStorage REST API v2. No Pure1 cloud account or RSA key required.
 
