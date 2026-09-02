@@ -6,6 +6,15 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-09-02 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.7
+#   fix: _perf_bandwidth and _perf_bw_threshold defined inside -ePerf block but
+#        called from -eRepl block (array-connections/performance/replication);
+#        when -ePerf is disabled (or not explicitly enabled), functions were
+#        undefined -> "command not found" errors and empty rcp_*_tx/rx perfdata;
+#        fixed by moving both function definitions outside the conditional block
+#        so they are always available regardless of which checks are enabled
+#
 # 2026-08-17 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.6
 #   -eCTRL: skip controllers check silently when endpoint returns empty body;
@@ -180,7 +189,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.9.6"
+REVISION="2.9.7"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -1550,32 +1559,33 @@ if [[ ( -n "${enable_blades}" || -n "${enable_all}" ) && -z "${disable_blades}" 
 fi
 
 # ---------------------------------------------------------------------------
+# Bandwidth helper functions (used by -ePerf and -eRepl; defined unconditionally)
+# ---------------------------------------------------------------------------
+_perf_bandwidth() {
+	echo "${1}" | "${AWK}" -v unit="${bw_unit}" '{
+		if      (unit == "GB") printf "%.3fGB",  $1/1073741824
+		else if (unit == "MB") printf "%.3fMB",  $1/1048576
+		else if (unit == "KB") printf "%.3fKB",  $1/1024
+		else if (unit == "B")  printf "%dB",     $1
+		else if ($1>=1073741824) printf "%.3fGB", $1/1073741824
+		else                   printf "%.3fMB",  $1/1048576}'
+}
+_perf_bw_threshold() {
+	[[ -z "${1}" ]] && return
+	echo "${1}" | "${AWK}" -v unit="${bw_unit}" '{
+		if      (unit == "GB") printf "%.3f", $1/1024
+		else if (unit == "KB") printf "%.0f", $1*1024
+		else if (unit == "B")  printf "%.0f", $1*1048576
+		else                   printf "%.3f", $1}'
+}
+
+# ---------------------------------------------------------------------------
 # I/O Performance Check  (arrays/performance + file-systems/performance + buckets/performance)
 # ---------------------------------------------------------------------------
 if [[ ( -n "${enable_perf}" || -n "${enable_all}" ) && -z "${disable_perf}" ]]; then
 	if [[ -n "${verbose}" ]]; then
 		pure_output+="I/O Performance:\n---------------------------------------\n"
 	fi
-
-	_perf_bandwidth() {
-		echo "${1}" | "${AWK}" -v unit="${bw_unit}" '{
-			if      (unit == "GB") printf "%.3fGB",  $1/1073741824
-			else if (unit == "MB") printf "%.3fMB",  $1/1048576
-			else if (unit == "KB") printf "%.3fKB",  $1/1024
-			else if (unit == "B")  printf "%dB",     $1
-			else if ($1>=1073741824) printf "%.3fGB", $1/1073741824
-			else                   printf "%.3fMB",  $1/1048576}'
-	}
-
-	# Convert a MB/s threshold value to the perfdata bandwidth unit
-	_perf_bw_threshold() {
-		[[ -z "${1}" ]] && return
-		echo "${1}" | "${AWK}" -v unit="${bw_unit}" '{
-			if      (unit == "GB") printf "%.3f", $1/1024
-			else if (unit == "KB") printf "%.0f", $1*1024
-			else if (unit == "B")  printf "%.0f", $1*1048576
-			else                   printf "%.3f", $1}'
-	}
 
 	# Array-level performance
 	perf_arr_buffer=`${api_cmd_get}/arrays/performance \
