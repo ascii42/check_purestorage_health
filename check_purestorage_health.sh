@@ -6,6 +6,13 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-09-03 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.8
+#   fix: -eSnap: removed multiple mapfile-per-field pattern with single jq pass
+#        (tab-separated) to prevent array misalignment when API returns null/
+#        missing fields for certain snapshot types (pod snapshots, empty snaps)
+#        which caused wrong physical/dr values in perfdata and empty DR in output
+#
 # 2026-09-02 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.7
 #   fix: _perf_bandwidth and _perf_bw_threshold defined inside -ePerf block but
@@ -189,7 +196,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.9.7"
+REVISION="2.9.8"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -2541,37 +2548,31 @@ if [[ ( -n "${enable_snaps}" || -n "${enable_all}" ) && -z "${disable_snaps}" ]]
 		_vsnap_count=`echo "${vol_snap_buffer}" | "${JQ}" --unbuffered '.items | length' 2>/dev/null`
 		_vsnap_t_prov=`echo "${vol_snap_buffer}" | "${JQ}" --unbuffered -r '.total[0].space.total_provisioned // 0' 2>/dev/null`
 		_vsnap_t_phys=`echo "${vol_snap_buffer}" | "${JQ}" --unbuffered -r '.total[0].space.total_physical // 0' 2>/dev/null`
-		_vsnap_t_dr=`echo "${vol_snap_buffer}" | "${JQ}" --unbuffered -r '.total[0].space.data_reduction // 0' 2>/dev/null`
 		_vsnap_t_prov_h=`echo "${_vsnap_t_prov}" | "${AWK}" "${_size_fmt}"`
 		_vsnap_t_phys_h=`echo "${_vsnap_t_phys}" | "${AWK}" "${_size_fmt}"`
-		_vsnap_t_dr_s=`echo "${_vsnap_t_dr}" | "${AWK}" '{printf "%.2f:1",$1}'`
 
-		pure_output+="${status_ok} - Volume Snapshots ${array_name}: ${_vsnap_count} snapshot(s) Provisioned: ${_vsnap_t_prov_h} Physical: ${_vsnap_t_phys_h} DR: ${_vsnap_t_dr_s}\n"
+		pure_output+="${status_ok} - Volume Snapshots ${array_name}: ${_vsnap_count} snapshot(s) Provisioned: ${_vsnap_t_prov_h} Physical: ${_vsnap_t_phys_h}\n"
 		pure_perf+=" vol_snap_count=${_vsnap_count} vol_snap_provisioned=${_vsnap_t_prov}B vol_snap_physical=${_vsnap_t_phys}B"
 
-		# per-snapshot: batch-populate arrays for both perfdata and verbose output
-		declare -a _vsnap_name _vsnap_safe _vsnap_src _vsnap_prov _vsnap_phys _vsnap_dr
-		declare -a _vsnap_prov_h _vsnap_phys_h _vsnap_dr_s
-		mapfile -t _vsnap_name < <(echo "${vol_snap_buffer}" | "${JQ}" --unbuffered -r '.items[].name // "unknown"' 2>/dev/null)
-		mapfile -t _vsnap_src  < <(echo "${vol_snap_buffer}" | "${JQ}" --unbuffered -r '.items[].source.name // "unknown"' 2>/dev/null)
-		mapfile -t _vsnap_prov < <(echo "${vol_snap_buffer}" | "${JQ}" --unbuffered -r '.items[].space.total_provisioned // 0' 2>/dev/null)
-		mapfile -t _vsnap_phys < <(echo "${vol_snap_buffer}" | "${JQ}" --unbuffered -r '.items[].space.total_physical // 0' 2>/dev/null)
-		mapfile -t _vsnap_dr   < <(echo "${vol_snap_buffer}" | "${JQ}" --unbuffered -r '.items[].space.data_reduction // 0' 2>/dev/null)
-		mapfile -t _vsnap_safe < <(printf '%s\n' "${_vsnap_name[@]}" | sed 's/[.\/: -]/_/g')
-		mapfile -t _vsnap_prov_h < <(printf '%s\n' "${_vsnap_prov[@]}" | "${AWK}" "${_size_fmt}")
-		mapfile -t _vsnap_phys_h < <(printf '%s\n' "${_vsnap_phys[@]}" | "${AWK}" "${_size_fmt}")
-		mapfile -t _vsnap_dr_s   < <(printf '%s\n' "${_vsnap_dr[@]}"   | "${AWK}" '{printf "%.2f:1\n",$1}')
-
-		for count in "${!_vsnap_name[@]}"; do
-			pure_perf+=" snap_${_vsnap_safe[count]}_provisioned=${_vsnap_prov[count]}B"
-			pure_perf+=" snap_${_vsnap_safe[count]}_physical=${_vsnap_phys[count]}B"
-			pure_perf+=" snap_${_vsnap_safe[count]}_dr=${_vsnap_dr_s[count]}"
+		# per-snapshot: single jq pass (tab-separated) guarantees all fields stay aligned
+		# even when some space fields are null or missing for certain snapshot types
+		while IFS=$'\t' read -r _sname _ssrc _sprov _sphys; do
+			[[ -z "${_sname}" ]] && continue
+			_ssafe=$(echo "${_sname}" | sed 's/[.\/: -]/_/g')
+			_sprov_h=$(echo "${_sprov}" | "${AWK}" "${_size_fmt}")
+			_sphys_h=$(echo "${_sphys}" | "${AWK}" "${_size_fmt}")
+			pure_perf+=" snap_${_ssafe}_provisioned=${_sprov}B"
+			pure_perf+=" snap_${_ssafe}_physical=${_sphys}B"
 			if [[ -n "${verbose}" ]]; then
-				pure_output+="${status_ok} - Snapshot ${array_name}/${_vsnap_name[count]} (src: ${_vsnap_src[count]}): Provisioned: ${_vsnap_prov_h[count]} Physical: ${_vsnap_phys_h[count]} DR: ${_vsnap_dr_s[count]}\n"
+				pure_output+="${status_ok} - Snapshot ${array_name}/${_sname} (src: ${_ssrc}): Provisioned: ${_sprov_h} Physical: ${_sphys_h}\n"
 			fi
-		done
-		unset _vsnap_name _vsnap_safe _vsnap_src _vsnap_prov _vsnap_phys _vsnap_dr \
-		      _vsnap_prov_h _vsnap_phys_h _vsnap_dr_s
+		done < <(echo "${vol_snap_buffer}" | "${JQ}" --unbuffered -r '
+			.items[] | [
+				(.name // "unknown"),
+				(.source.name // "unknown"),
+				((.space.total_provisioned // 0) | tostring),
+				((.space.total_physical    // 0) | tostring)
+			] | join("\t")' 2>/dev/null)
 	fi
 
 	if [[ -n "${verbose}" ]]; then
