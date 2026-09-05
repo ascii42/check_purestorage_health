@@ -6,6 +6,13 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-09-04 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.9
+#   perf: -eSnap: eliminate per-snapshot subprocess spawns (sed + awk per item);
+#         safe-name transform moved into jq (gsub), byte formatting moved into a
+#         single batch awk pass piped from jq output; reduces 973-snapshot run from
+#         ~2919 subprocess invocations to 2 total (1 jq + 1 awk)
+#
 # 2026-09-03 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.8
 #   fix: -eSnap: removed multiple mapfile-per-field pattern with single jq pass
@@ -196,7 +203,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.9.8"
+REVISION="2.9.9"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -2554,13 +2561,10 @@ if [[ ( -n "${enable_snaps}" || -n "${enable_all}" ) && -z "${disable_snaps}" ]]
 		pure_output+="${status_ok} - Volume Snapshots ${array_name}: ${_vsnap_count} snapshot(s) Provisioned: ${_vsnap_t_prov_h} Physical: ${_vsnap_t_phys_h}\n"
 		pure_perf+=" vol_snap_count=${_vsnap_count} vol_snap_provisioned=${_vsnap_t_prov}B vol_snap_physical=${_vsnap_t_phys}B"
 
-		# per-snapshot: single jq pass (tab-separated) guarantees all fields stay aligned
-		# even when some space fields are null or missing for certain snapshot types
-		while IFS=$'\t' read -r _sname _ssrc _sprov _sphys; do
+		# jq outputs name/safe-name/src/raw-bytes; awk formats all human-readable values in
+		# one batch pass - zero per-snapshot subprocess spawns
+		while IFS=$'\t' read -r _sname _ssafe _ssrc _sprov _sprov_h _sphys _sphys_h; do
 			[[ -z "${_sname}" ]] && continue
-			_ssafe=$(echo "${_sname}" | sed 's/[.\/: -]/_/g')
-			_sprov_h=$(echo "${_sprov}" | "${AWK}" "${_size_fmt}")
-			_sphys_h=$(echo "${_sphys}" | "${AWK}" "${_size_fmt}")
 			pure_perf+=" snap_${_ssafe}_provisioned=${_sprov}B"
 			pure_perf+=" snap_${_ssafe}_physical=${_sphys}B"
 			if [[ -n "${verbose}" ]]; then
@@ -2569,10 +2573,22 @@ if [[ ( -n "${enable_snaps}" || -n "${enable_all}" ) && -z "${disable_snaps}" ]]
 		done < <(echo "${vol_snap_buffer}" | "${JQ}" --unbuffered -r '
 			.items[] | [
 				(.name // "unknown"),
+				(.name // "unknown" | gsub("[-./: ]"; "_")),
 				(.source.name // "unknown"),
 				((.space.total_provisioned // 0) | tostring),
 				((.space.total_physical    // 0) | tostring)
-			] | join("\t")' 2>/dev/null)
+			] | join("\t")' 2>/dev/null | "${AWK}" -F'\t' 'BEGIN{OFS="\t"} {
+				prov=$4+0; phys=$5+0
+				if      (prov>=1099511627776) provh=sprintf("%.2f TiB",prov/1099511627776)
+				else if (prov>=1073741824)    provh=sprintf("%.2f GiB",prov/1073741824)
+				else if (prov>=1048576)       provh=sprintf("%.2f MiB",prov/1048576)
+				else                          provh=sprintf("%d B",prov)
+				if      (phys>=1099511627776) physh=sprintf("%.2f TiB",phys/1099511627776)
+				else if (phys>=1073741824)    physh=sprintf("%.2f GiB",phys/1073741824)
+				else if (phys>=1048576)       physh=sprintf("%.2f MiB",phys/1048576)
+				else                          physh=sprintf("%d B",phys)
+				print $1,$2,$3,$4,provh,$5,physh
+			}')
 	fi
 
 	if [[ -n "${verbose}" ]]; then
