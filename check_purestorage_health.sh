@@ -7,6 +7,9 @@
 #
 # Version history:
 # 2026-09-30 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.11
+#   fix: --select-volumes status line
+# 2026-09-30 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.10
 #   fix: --select-volumes returns too much perfdata, not only
 #       for the selected volume, fixed now
@@ -207,7 +210,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.9.10"
+REVISION="2.9.11"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -2528,7 +2531,7 @@ if [[ ( -n "${enable_vol}" || -n "${enable_all}" ) && -z "${disable_vol}" ]]; th
 				pure_problem_output+="${status_warn} - Volume ${array_name}/${_vname}: Physical ${_pvol_pct[count]}% >= ${warn_vol}%\n"
 				;;
 			*)
-				if [[ -n "${verbose}" ]]; then
+				if [[ -n "${verbose}" || -n "${vol_select}" ]]; then
 					pure_output+="${status_ok} - Volume ${array_name}/${_vname}: Physical: ${_pvol_pct[count]}% Provisioned: ${_pvol_prov_h[count]} Physical: ${_pvol_phys_h[count]} Snapshots: ${_pvol_snap_h[count]} DR: ${_pvol_dr_s[count]}${_vs_perf_suffix}\n"
 				fi
 				;;
