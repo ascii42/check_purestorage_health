@@ -6,6 +6,10 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-09-30 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.10
+#   fix: --select-volumes returns too much perfdata, not only
+#       for the selected volume, fixed now
 # 2026-09-04 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.9
 #   perf: -eSnap: eliminate per-snapshot subprocess spawns (sed + awk per item);
@@ -203,7 +207,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.9.9"
+REVISION="2.9.10"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -2387,28 +2391,30 @@ if [[ ( -n "${enable_vol}" || -n "${enable_all}" ) && -z "${disable_vol}" ]]; th
 		_vt_dr_s=`echo "${_vt_dr}" | "${AWK}" '{printf "%.2f:1",$1}'`
 		_vt_pct=`echo "${_vt_physical} ${_vt_provisioned}" | "${AWK}" '{if($2>0) printf "%.1f",$1/$2*100; else print "0"}'`
 
-		_vt_state=`echo "${_vt_pct} ${crit_vol} ${warn_vol}" | "${AWK}" '{if($1+0>=$2+0) print "crit"; else if($1+0>=$3+0) print "warn"; else print "ok"}'`
-		case "${_vt_state}" in
-		crit)
-			pure_output+="${status_crit} - Volumes ${array_name}: ${_vt_count} vol(s) Physical ${_vt_pct}% of Provisioned (${_vt_phys_h}/${_vt_prov_h}) Snapshots: ${_vt_snap_h} DR: ${_vt_dr_s}\n"
-			pure_problem_output+="${status_crit} - Volumes ${array_name}: Physical ${_vt_pct}% >= ${crit_vol}%\n"
-			;;
-		warn)
-			pure_output+="${status_warn} - Volumes ${array_name}: ${_vt_count} vol(s) Physical ${_vt_pct}% of Provisioned (${_vt_phys_h}/${_vt_prov_h}) Snapshots: ${_vt_snap_h} DR: ${_vt_dr_s}\n"
-			pure_problem_output+="${status_warn} - Volumes ${array_name}: Physical ${_vt_pct}% >= ${warn_vol}%\n"
-			;;
-		*)
-			pure_output+="${status_ok} - Volumes ${array_name}: ${_vt_count} vol(s) Physical: ${_vt_pct}% Provisioned: ${_vt_prov_h} Physical: ${_vt_phys_h} Snapshots: ${_vt_snap_h} DR: ${_vt_dr_s}\n"
-			;;
-		esac
+		if [[ -z "${vol_select}" ]]; then
+			_vt_state=`echo "${_vt_pct} ${crit_vol} ${warn_vol}" | "${AWK}" '{if($1+0>=$2+0) print "crit"; else if($1+0>=$3+0) print "warn"; else print "ok"}'`
+			case "${_vt_state}" in
+			crit)
+				pure_output+="${status_crit} - Volumes ${array_name}: ${_vt_count} vol(s) Physical ${_vt_pct}% of Provisioned (${_vt_phys_h}/${_vt_prov_h}) Snapshots: ${_vt_snap_h} DR: ${_vt_dr_s}\n"
+				pure_problem_output+="${status_crit} - Volumes ${array_name}: Physical ${_vt_pct}% >= ${crit_vol}%\n"
+				;;
+			warn)
+				pure_output+="${status_warn} - Volumes ${array_name}: ${_vt_count} vol(s) Physical ${_vt_pct}% of Provisioned (${_vt_phys_h}/${_vt_prov_h}) Snapshots: ${_vt_snap_h} DR: ${_vt_dr_s}\n"
+				pure_problem_output+="${status_warn} - Volumes ${array_name}: Physical ${_vt_pct}% >= ${warn_vol}%\n"
+				;;
+			*)
+				pure_output+="${status_ok} - Volumes ${array_name}: ${_vt_count} vol(s) Physical: ${_vt_pct}% Provisioned: ${_vt_prov_h} Physical: ${_vt_phys_h} Snapshots: ${_vt_snap_h} DR: ${_vt_dr_s}\n"
+				;;
+			esac
 
-		pure_perf+=" vol_total=${_vt_count}"
-		pure_perf+=" vol_provisioned=${_vt_provisioned}B"
-		pure_perf+=" vol_physical=${_vt_physical}B"
-		pure_perf+=" vol_unique=${_vt_unique}B"
-		pure_perf+=" vol_snapshots=${_vt_snapshots}B"
-		pure_perf+=" vol_data_reduction=${_vt_dr_s}"
-		pure_perf+=" vol_physical_pct=${_vt_pct};${warn_vol};${crit_vol};0;100"
+			pure_perf+=" vol_total=${_vt_count}"
+			pure_perf+=" vol_provisioned=${_vt_provisioned}B"
+			pure_perf+=" vol_physical=${_vt_physical}B"
+			pure_perf+=" vol_unique=${_vt_unique}B"
+			pure_perf+=" vol_snapshots=${_vt_snapshots}B"
+			pure_perf+=" vol_data_reduction=${_vt_dr_s}"
+			pure_perf+=" vol_physical_pct=${_vt_pct};${warn_vol};${crit_vol};0;100"
+		fi
 	fi
 
 	# --- Performance totals ---
@@ -2426,19 +2432,21 @@ if [[ ( -n "${enable_vol}" || -n "${enable_all}" ) && -z "${disable_vol}" ]]; th
 		_vp_r_lat_ms=`echo "${_vp_r_lat}" | "${AWK}" '{printf "%.3f ms",$1/1000}'`
 		_vp_w_lat_ms=`echo "${_vp_w_lat}" | "${AWK}" '{printf "%.3f ms",$1/1000}'`
 
-		if [[ -n "${verbose}" || -n "${show_perfdata}" ]]; then
-			_vp_space_suffix=""
-			[[ -n "${_vt_prov_h}" ]] && _vp_space_suffix=" Provisioned: ${_vt_prov_h} Physical: ${_vt_phys_h} Snapshots: ${_vt_snap_h} DR: ${_vt_dr_s}"
-			pure_output+="${status_ok} - Volume Perf ${array_name} (total): IOPS: ${_vp_total_iops} (R:${_vp_r_iops} W:${_vp_w_iops}) BW: R:${_vp_r_bw_h} W:${_vp_w_bw_h} Latency: R:${_vp_r_lat_ms} W:${_vp_w_lat_ms}${_vp_space_suffix}\n"
-		fi
+		if [[ -z "${vol_select}" ]]; then
+			if [[ -n "${verbose}" || -n "${show_perfdata}" ]]; then
+				_vp_space_suffix=""
+				[[ -n "${_vt_prov_h}" ]] && _vp_space_suffix=" Provisioned: ${_vt_prov_h} Physical: ${_vt_phys_h} Snapshots: ${_vt_snap_h} DR: ${_vt_dr_s}"
+				pure_output+="${status_ok} - Volume Perf ${array_name} (total): IOPS: ${_vp_total_iops} (R:${_vp_r_iops} W:${_vp_w_iops}) BW: R:${_vp_r_bw_h} W:${_vp_w_bw_h} Latency: R:${_vp_r_lat_ms} W:${_vp_w_lat_ms}${_vp_space_suffix}\n"
+			fi
 
-		pure_perf+=" vol_read_iops=${_vp_r_iops}"
-		pure_perf+=" vol_write_iops=${_vp_w_iops}"
-		pure_perf+=" vol_total_iops=${_vp_total_iops}"
-		pure_perf+=" vol_read_bandwidth=${_vp_r_bw}B"
-		pure_perf+=" vol_write_bandwidth=${_vp_w_bw}B"
-		pure_perf+=" vol_read_latency=${_vp_r_lat}us"
-		pure_perf+=" vol_write_latency=${_vp_w_lat}us"
+			pure_perf+=" vol_read_iops=${_vp_r_iops}"
+			pure_perf+=" vol_write_iops=${_vp_w_iops}"
+			pure_perf+=" vol_total_iops=${_vp_total_iops}"
+			pure_perf+=" vol_read_bandwidth=${_vp_r_bw}B"
+			pure_perf+=" vol_write_bandwidth=${_vp_w_bw}B"
+			pure_perf+=" vol_read_latency=${_vp_r_lat}us"
+			pure_perf+=" vol_write_latency=${_vp_w_lat}us"
+		fi
 	fi
 
 	# --- Per-volume (threshold check + optional verbose detail) ---
