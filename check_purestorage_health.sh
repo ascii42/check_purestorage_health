@@ -6,6 +6,9 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-11-20 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.12
+#   fix: added blacklist nic fix
 # 2026-09-30 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.11
 #   fix: --select-volumes status line
@@ -1188,6 +1191,15 @@ fi
 if [[ ( -n "${enable_hardware}" || -n "${enable_all}" ) && -z "${disable_hardware}" ]]; then
 	hw_buffer=`${api_cmd_get}/hardware \
 		-H "${CURL_OPTS_AUTH}" -H "${CURL_OPTS_JSON}"`
+
+	# Apply NIC blacklist to hardware components as well
+	if [[ -n "${ni_blacklist}" ]]; then
+    	hw_buffer=$(echo "${hw_buffer}" | "${JQ}" \
+        	--arg blacklist "${ni_blacklist}" \
+        	'.items |= map(select(
+           	 (.name as $n | ($blacklist | split(",")) | index($n)) == null
+        	))')
+	fi
 
 	if [[ -n "${verbose}" ]]; then
 		pure_output+="Hardware:\n---------------------------------------\n"
