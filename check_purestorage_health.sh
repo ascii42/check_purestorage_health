@@ -6,6 +6,9 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-11-25 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.13
+#   fix: exit codes
 # 2026-11-20 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.12
 #   fix: added blacklist nic fix
@@ -233,7 +236,7 @@ PERF_QUEUE="queue_depth"
 exit_unknown() {
 	echo "Unknown parameter: ${1}"
 	print_usage
-	exit 4
+	exit 3
 }
 
 # Return 0 if every comma-separated token in $1 appears in $2 (also comma-separated)
@@ -864,9 +867,9 @@ while [[ -n "${1}" ]]; do
 done
 
 # Check mandatory parameters and dependencies
-[[ -z "${JQ}" ]]   && { echo "${PROGNAME}: jq is required - please install it";   exit 4; }
-[[ -z "${CURL}" ]] && { echo "${PROGNAME}: curl is required - please install it"; exit 4; }
-[[ -z "${AWK}" ]]  && { echo "${PROGNAME}: awk is required - please install it";  exit 4; }
+[[ -z "${JQ}" ]]   && { echo "${PROGNAME}: jq is required - please install it";   exit 3; }
+[[ -z "${CURL}" ]] && { echo "${PROGNAME}: curl is required - please install it"; exit 3; }
+[[ -z "${AWK}" ]]  && { echo "${PROGNAME}: awk is required - please install it";  exit 3; }
 [[ -z "${array_host}" ]] && exit_unknown "Array hostname or IP (-H) is required!"
 [[ -z "${x_auth_token}" && -z "${api_token}" && ( -z "${api_user}" || -z "${api_pass}" ) ]] && \
 	exit_unknown "Authentication required: -a <api_token>  OR  -U <user> -P <pass>  OR  -T <token>"
@@ -985,7 +988,7 @@ if [[ -z "${x_auth_token}" ]]; then
 			"${JQ}" --unbuffered -r '.api_token // empty' 2>/dev/null`
 		if [[ -z "${api_token}" ]]; then
 			echo "${status_unkn} - Login to ${array_host} failed - could not retrieve API token for user '${api_user}'"
-			exit 4
+			exit 3
 		fi
 	fi
 
@@ -1004,7 +1007,7 @@ if [[ -z "${x_auth_token}" ]]; then
 
 	if [[ -z "${x_auth_token}" ]]; then
 		echo "${status_unkn} - Login to ${array_host} failed - check host, credentials and API version"
-		exit 4
+		exit 3
 	fi
 fi
 
@@ -1029,7 +1032,7 @@ array_version=`echo "${arrays_buffer}" | "${JQ}" --unbuffered -r '.items[0].vers
 # Optional: validate array name matches expected
 if [[ -n "${array_filter}" && "${array_name}" != "${array_filter}" ]]; then
 	echo "${status_unkn} - Connected array name '${array_name}' does not match expected '${array_filter}'"
-	exit 4
+	exit 3
 fi
 
 # ---------------------------------------------------------------------------
