@@ -6,6 +6,12 @@
 #   Felix Longardt <monitoring@longardt.com>
 #
 # Version history:
+# 2026-11-26 Felix Longardt <monitoring@longardt.com>
+# Release: 2.10.0
+#   apply patch by @dcz010 to fix wrong results
+# 2026-11-25 Felix Longardt <monitoring@longardt.com>
+# Release: 2.9.13
+#   fix: exit codes
 # 2026-11-20 Felix Longardt <monitoring@longardt.com>
 # Release: 2.9.12
 #   fix: added blacklist nic fix
@@ -213,7 +219,7 @@
 ## VARIABLES
 PROGNAME="${0##*/}"
 PROGPATH="${0%/*}"
-REVISION="2.9.11"
+REVISION="2.10.0"
 JQ="$(which jq)"
 CURL="$(which curl)"
 AWK="$(which awk)"
@@ -233,7 +239,7 @@ PERF_QUEUE="queue_depth"
 exit_unknown() {
 	echo "Unknown parameter: ${1}"
 	print_usage
-	exit 4
+	exit 3
 }
 
 # Return 0 if every comma-separated token in $1 appears in $2 (also comma-separated)
@@ -864,9 +870,9 @@ while [[ -n "${1}" ]]; do
 done
 
 # Check mandatory parameters and dependencies
-[[ -z "${JQ}" ]]   && { echo "${PROGNAME}: jq is required - please install it";   exit 4; }
-[[ -z "${CURL}" ]] && { echo "${PROGNAME}: curl is required - please install it"; exit 4; }
-[[ -z "${AWK}" ]]  && { echo "${PROGNAME}: awk is required - please install it";  exit 4; }
+[[ -z "${JQ}" ]]   && { echo "${PROGNAME}: jq is required - please install it";   exit 3; }
+[[ -z "${CURL}" ]] && { echo "${PROGNAME}: curl is required - please install it"; exit 3; }
+[[ -z "${AWK}" ]]  && { echo "${PROGNAME}: awk is required - please install it";  exit 3; }
 [[ -z "${array_host}" ]] && exit_unknown "Array hostname or IP (-H) is required!"
 [[ -z "${x_auth_token}" && -z "${api_token}" && ( -z "${api_user}" || -z "${api_pass}" ) ]] && \
 	exit_unknown "Authentication required: -a <api_token>  OR  -U <user> -P <pass>  OR  -T <token>"
@@ -985,7 +991,7 @@ if [[ -z "${x_auth_token}" ]]; then
 			"${JQ}" --unbuffered -r '.api_token // empty' 2>/dev/null`
 		if [[ -z "${api_token}" ]]; then
 			echo "${status_unkn} - Login to ${array_host} failed - could not retrieve API token for user '${api_user}'"
-			exit 4
+			exit 3
 		fi
 	fi
 
@@ -1004,7 +1010,7 @@ if [[ -z "${x_auth_token}" ]]; then
 
 	if [[ -z "${x_auth_token}" ]]; then
 		echo "${status_unkn} - Login to ${array_host} failed - check host, credentials and API version"
-		exit 4
+		exit 3
 	fi
 fi
 
@@ -1029,7 +1035,7 @@ array_version=`echo "${arrays_buffer}" | "${JQ}" --unbuffered -r '.items[0].vers
 # Optional: validate array name matches expected
 if [[ -n "${array_filter}" && "${array_name}" != "${array_filter}" ]]; then
 	echo "${status_unkn} - Connected array name '${array_name}' does not match expected '${array_filter}'"
-	exit 4
+	exit 3
 fi
 
 # ---------------------------------------------------------------------------
@@ -1208,9 +1214,9 @@ if [[ ( -n "${enable_hardware}" || -n "${enable_all}" ) && -z "${disable_hardwar
 	declare -a hw_comp hw_status hw_temp hw_type
 
 	hw_comp=(  `echo "${hw_buffer}" | "${JQ}" --unbuffered -r '.items[].name'                  2>/dev/null | "${AWK}" 1 ORS=' '`)
-	hw_status=(`echo "${hw_buffer}" | "${JQ}" --unbuffered -r '.items[].status // "unknown"'  2>/dev/null | "${AWK}" 1 ORS=' '`)
-	hw_temp=(  `echo "${hw_buffer}" | "${JQ}" --unbuffered -r '.items[].temperature // "null"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
-	hw_type=(  `echo "${hw_buffer}" | "${JQ}" --unbuffered -r '.items[].type // "unknown"'    2>/dev/null | "${AWK}" 1 ORS=' '`)
+	hw_status=(`echo "${hw_buffer}" | "${JQ}" --unbuffered -r '.items[] | .status // "unknown"'  2>/dev/null | "${AWK}" 1 ORS=' '`)
+	hw_temp=(  `echo "${hw_buffer}" | "${JQ}" --unbuffered -r '.items[] | .temperature // "null"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	hw_type=(  `echo "${hw_buffer}" | "${JQ}" --unbuffered -r '.items[] | .type // "unknown"'    2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	for count in "${!hw_comp[@]}"; do
 		_stat="${hw_status[count]}"
@@ -1277,10 +1283,10 @@ if [[ ( -n "${enable_conn}" || -n "${enable_all}" ) && -z "${disable_conn}" ]]; 
 	declare -a cn_name cn_conn_type cn_xcvr cn_lane_speed cn_port_count
 
 	cn_name=(       `echo "${cn_buffer}" | "${JQ}" --unbuffered -r '.items[].name'                        2>/dev/null | "${AWK}" 1 ORS=' '`)
-	cn_conn_type=(  `echo "${cn_buffer}" | "${JQ}" --unbuffered -r '.items[].connector_type // "unknown"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
-	cn_xcvr=(       `echo "${cn_buffer}" | "${JQ}" --unbuffered -r '.items[].transceiver_type // ""'      2>/dev/null | "${AWK}" 1 ORS=' '`)
-	cn_lane_speed=( `echo "${cn_buffer}" | "${JQ}" --unbuffered -r '.items[].lane_speed // 0'             2>/dev/null | "${AWK}" 1 ORS=' '`)
-	cn_port_count=( `echo "${cn_buffer}" | "${JQ}" --unbuffered -r '.items[].port_count // 0'             2>/dev/null | "${AWK}" 1 ORS=' '`)
+	cn_conn_type=(  `echo "${cn_buffer}" | "${JQ}" --unbuffered -r '.items[] | .connector_type // "unknown"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	cn_xcvr=(       `echo "${cn_buffer}" | "${JQ}" --unbuffered -r '.items[] | .transceiver_type // ""'      2>/dev/null | "${AWK}" 1 ORS=' '`)
+	cn_lane_speed=( `echo "${cn_buffer}" | "${JQ}" --unbuffered -r '.items[] | .lane_speed // 0'             2>/dev/null | "${AWK}" 1 ORS=' '`)
+	cn_port_count=( `echo "${cn_buffer}" | "${JQ}" --unbuffered -r '.items[] | .port_count // 0'             2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	_cn_total=0
 	_cn_unkn=0
@@ -1347,10 +1353,10 @@ if [[ ( -n "${enable_ctrl}" || -n "${enable_all}" ) && -z "${disable_ctrl}" ]]; 
 	declare -a ct_name ct_status ct_mode ct_model ct_version
 
 	ct_name=(   `echo "${ctrl_buffer}" | "${JQ}" --unbuffered -r '.items[].name'             2>/dev/null | "${AWK}" 1 ORS=' '`)
-	ct_status=( `echo "${ctrl_buffer}" | "${JQ}" --unbuffered -r '.items[].status // "unknown"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
-	ct_mode=(   `echo "${ctrl_buffer}" | "${JQ}" --unbuffered -r '.items[].mode // ""'       2>/dev/null | "${AWK}" 1 ORS=' '`)
-	ct_model=(  `echo "${ctrl_buffer}" | "${JQ}" --unbuffered -r '.items[].model // "n/a"'   2>/dev/null | "${AWK}" 1 ORS=' '`)
-	ct_version=(`echo "${ctrl_buffer}" | "${JQ}" --unbuffered -r '.items[].version // "n/a"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	ct_status=( `echo "${ctrl_buffer}" | "${JQ}" --unbuffered -r '.items[] | .status // "unknown"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	ct_mode=(   `echo "${ctrl_buffer}" | "${JQ}" --unbuffered -r '.items[] | .mode // ""'       2>/dev/null | "${AWK}" 1 ORS=' '`)
+	ct_model=(  `echo "${ctrl_buffer}" | "${JQ}" --unbuffered -r '.items[] | .model // "n/a"'   2>/dev/null | "${AWK}" 1 ORS=' '`)
+	ct_version=(`echo "${ctrl_buffer}" | "${JQ}" --unbuffered -r '.items[] | .version // "n/a"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	_ct_total=0
 	_ct_crit=0
@@ -1442,8 +1448,8 @@ if [[ ( -n "${enable_drives}" || -n "${enable_all}" ) && -z "${disable_drives}" 
 	declare -a dr_name dr_status dr_type
 
 	dr_name=(  `echo "${drives_buffer}" | "${JQ}" --unbuffered -r '.items[].name'           2>/dev/null | "${AWK}" 1 ORS=' '`)
-	dr_status=(`echo "${drives_buffer}" | "${JQ}" --unbuffered -r '.items[].status // "ok"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
-	dr_type=(  `echo "${drives_buffer}" | "${JQ}" --unbuffered -r '.items[].type // "SSD"'  2>/dev/null | "${AWK}" 1 ORS=' '`)
+	dr_status=(`echo "${drives_buffer}" | "${JQ}" --unbuffered -r '.items[] | .status // "ok"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	dr_type=(  `echo "${drives_buffer}" | "${JQ}" --unbuffered -r '.items[] | .type // "SSD"'  2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	_dr_total=0
 	_dr_healthy=0
@@ -2471,12 +2477,12 @@ if [[ ( -n "${enable_vol}" || -n "${enable_all}" ) && -z "${disable_vol}" ]]; th
 		declare -a _pvol_name _pvol_safe _pvol_prov _pvol_phys _pvol_dr _pvol_snap
 		declare -a _pvol_prov_h _pvol_phys_h _pvol_snap_h _pvol_dr_s _pvol_pct _pvol_state
 
-		mapfile -t _pvol_name < <(echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.items[].name // "unknown"' 2>/dev/null)
+		mapfile -t _pvol_name < <(echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.items[] | .name // "unknown"' 2>/dev/null)
 		mapfile -t _pvol_safe < <(printf '%s\n' "${_pvol_name[@]}" | sed 's/[.\/: -]/_/g')
-		mapfile -t _pvol_prov < <(echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.items[].space.total_provisioned // 0' 2>/dev/null)
-		mapfile -t _pvol_phys < <(echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.items[].space.total_physical // 0' 2>/dev/null)
-		mapfile -t _pvol_dr   < <(echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.items[].space.data_reduction // 0' 2>/dev/null)
-		mapfile -t _pvol_snap < <(echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.items[].space.snapshots // 0' 2>/dev/null)
+		mapfile -t _pvol_prov < <(echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.items[] | .space.total_provisioned // 0' 2>/dev/null)
+		mapfile -t _pvol_phys < <(echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.items[] | .space.total_physical // 0' 2>/dev/null)
+		mapfile -t _pvol_dr   < <(echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.items[] | .space.data_reduction // 0' 2>/dev/null)
+		mapfile -t _pvol_snap < <(echo "${vol_space_buffer}" | "${JQ}" --unbuffered -r '.items[] | .space.snapshots // 0' 2>/dev/null)
 
 		_size_fmt='{if($1>=1099511627776) printf "%.2f TiB\n",$1/1099511627776; else if($1>=1073741824) printf "%.2f GiB\n",$1/1073741824; else if($1>=1048576) printf "%.2f MiB\n",$1/1048576; else printf "%d B\n",$1}'
 		mapfile -t _pvol_prov_h < <(printf '%s\n' "${_pvol_prov[@]}" | "${AWK}" "${_size_fmt}")
@@ -2493,12 +2499,12 @@ if [[ ( -n "${enable_vol}" || -n "${enable_all}" ) && -z "${disable_vol}" ]]; th
 		_pvol_has_perf=""
 		if [[ -n "${vol_perf_buffer}" && ! "${vol_perf_buffer}" =~ '"error' ]]; then
 			declare -a _pvol_rlat _pvol_wlat
-			mapfile -t _pvol_riops  < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[].reads_per_sec // 0' 2>/dev/null)
-			mapfile -t _pvol_wiops  < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[].writes_per_sec // 0' 2>/dev/null)
-			mapfile -t _pvol_rbw    < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[].read_bytes_per_sec // 0' 2>/dev/null)
-			mapfile -t _pvol_wbw    < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[].write_bytes_per_sec // 0' 2>/dev/null)
-			mapfile -t _pvol_rlat   < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[].usec_per_read_op // 0' 2>/dev/null)
-			mapfile -t _pvol_wlat   < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[].usec_per_write_op // 0' 2>/dev/null)
+			mapfile -t _pvol_riops  < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[] | .reads_per_sec // 0' 2>/dev/null)
+			mapfile -t _pvol_wiops  < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[] | .writes_per_sec // 0' 2>/dev/null)
+			mapfile -t _pvol_rbw    < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[] | .read_bytes_per_sec // 0' 2>/dev/null)
+			mapfile -t _pvol_wbw    < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[] | .write_bytes_per_sec // 0' 2>/dev/null)
+			mapfile -t _pvol_rlat   < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[] | .usec_per_read_op // 0' 2>/dev/null)
+			mapfile -t _pvol_wlat   < <(echo "${vol_perf_buffer}" | "${JQ}" --unbuffered -r '.items[] | .usec_per_write_op // 0' 2>/dev/null)
 			mapfile -t _pvol_tiops  < <(paste <(printf '%s\n' "${_pvol_riops[@]}") <(printf '%s\n' "${_pvol_wiops[@]}") \
 			                            | "${AWK}" '{print $1+$2}')
 			_bw_fmt='{if($1>=1048576) printf "%.2f MiB/s\n",$1/1048576; else if($1>=1024) printf "%.2f KiB/s\n",$1/1024; else printf "%d B/s\n",$1}'
@@ -2814,8 +2820,8 @@ if [[ ( -n "${enable_dirs}" || -n "${enable_all}" ) && -z "${disable_dirs}" ]]; 
 	declare -a di_name di_cap di_used
 
 	di_name=(`echo "${dirs_buffer}" | "${JQ}" --unbuffered -r '.items[].name'                      2>/dev/null | "${AWK}" 1 ORS=' '`)
-	di_cap=( `echo "${dirs_buffer}" | "${JQ}" --unbuffered -r '.items[].space.total_provisioned // 0' 2>/dev/null | "${AWK}" 1 ORS=' '`)
-	di_used=(`echo "${dirs_buffer}" | "${JQ}" --unbuffered -r '.items[].space.total_physical // 0' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	di_cap=( `echo "${dirs_buffer}" | "${JQ}" --unbuffered -r '.items[] | .space.total_provisioned // 0' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	di_used=(`echo "${dirs_buffer}" | "${JQ}" --unbuffered -r '.items[] | .space.total_physical // 0' 2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	for count in "${!di_name[@]}"; do
 		_cap="${di_cap[count]}"
@@ -2883,8 +2889,8 @@ if [[ ( -n "${enable_buckets}" || -n "${enable_all}" ) && -z "${disable_buckets}
 	declare -a bu_name bu_used bu_obj
 
 	bu_name=(`echo "${buckets_buffer}" | "${JQ}" --unbuffered -r '.items[].name'                       2>/dev/null | "${AWK}" 1 ORS=' '`)
-	bu_used=(`echo "${buckets_buffer}" | "${JQ}" --unbuffered -r '.items[].space.total_physical // 0'  2>/dev/null | "${AWK}" 1 ORS=' '`)
-	bu_obj=( `echo "${buckets_buffer}" | "${JQ}" --unbuffered -r '.items[].object_count // 0'          2>/dev/null | "${AWK}" 1 ORS=' '`)
+	bu_used=(`echo "${buckets_buffer}" | "${JQ}" --unbuffered -r '.items[] | .space.total_physical // 0'  2>/dev/null | "${AWK}" 1 ORS=' '`)
+	bu_obj=( `echo "${buckets_buffer}" | "${JQ}" --unbuffered -r '.items[] | .object_count // 0'          2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	for count in "${!bu_name[@]}"; do
 		_used="${bu_used[count]}"
@@ -2927,9 +2933,9 @@ if [[ ( -n "${enable_os}" || -n "${enable_all}" ) && -z "${disable_os}" ]]; then
 	declare -a os_name os_used os_cap os_obj
 
 	os_name=(`echo "${os_buffer}" | "${JQ}" --unbuffered -r '.items[].name'                       2>/dev/null | "${AWK}" 1 ORS=' '`)
-	os_used=(`echo "${os_buffer}" | "${JQ}" --unbuffered -r '.items[].space.total_physical // 0'  2>/dev/null | "${AWK}" 1 ORS=' '`)
-	os_cap=( `echo "${os_buffer}" | "${JQ}" --unbuffered -r '.items[].space.capacity // 0'        2>/dev/null | "${AWK}" 1 ORS=' '`)
-	os_obj=( `echo "${os_buffer}" | "${JQ}" --unbuffered -r '.items[].object_count // 0'          2>/dev/null | "${AWK}" 1 ORS=' '`)
+	os_used=(`echo "${os_buffer}" | "${JQ}" --unbuffered -r '.items[] | .space.total_physical // 0'  2>/dev/null | "${AWK}" 1 ORS=' '`)
+	os_cap=( `echo "${os_buffer}" | "${JQ}" --unbuffered -r '.items[] | .space.capacity // 0'        2>/dev/null | "${AWK}" 1 ORS=' '`)
+	os_obj=( `echo "${os_buffer}" | "${JQ}" --unbuffered -r '.items[] | .object_count // 0'          2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	for count in "${!os_name[@]}"; do
 		_cap="${os_cap[count]}"
@@ -3004,10 +3010,10 @@ if [[ ( -n "${enable_quotas}" || -n "${enable_all}" ) && -z "${disable_quotas}" 
 
 		declare -a _qname _qlimit _qused _qdir
 
-		_qname=( `echo "${_qbuf}" | "${JQ}" --unbuffered -r '.items[].name // "unknown"'           2>/dev/null | "${AWK}" 1 ORS=' '`)
-		_qlimit=(`echo "${_qbuf}" | "${JQ}" --unbuffered -r '.items[].quota_limit // 0'            2>/dev/null | "${AWK}" 1 ORS=' '`)
-		_qused=( `echo "${_qbuf}" | "${JQ}" --unbuffered -r '.items[].usage // 0'                  2>/dev/null | "${AWK}" 1 ORS=' '`)
-		_qdir=(  `echo "${_qbuf}" | "${JQ}" --unbuffered -r '.items[].directory.name // "unknown"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+		_qname=( `echo "${_qbuf}" | "${JQ}" --unbuffered -r '.items[] | .name // "unknown"'           2>/dev/null | "${AWK}" 1 ORS=' '`)
+		_qlimit=(`echo "${_qbuf}" | "${JQ}" --unbuffered -r '.items[] | .quota_limit // 0'            2>/dev/null | "${AWK}" 1 ORS=' '`)
+		_qused=( `echo "${_qbuf}" | "${JQ}" --unbuffered -r '.items[] | .usage // 0'                  2>/dev/null | "${AWK}" 1 ORS=' '`)
+		_qdir=(  `echo "${_qbuf}" | "${JQ}" --unbuffered -r '.items[] | .directory.name // "unknown"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 		for i in "${!_qname[@]}"; do
 			[[ "${_qlimit[i]}" == "0" || "${_qlimit[i]}" == "null" ]] && continue
@@ -3079,8 +3085,8 @@ if [[ ( -n "${enable_network}" || -n "${enable_all}" ) && -z "${disable_network}
 	declare -a ni_addr ni_gw ni_hwaddr ni_mtu ni_netmask ni_svcs
 
 	ni_name=(   `echo "${ni_buffer}" | "${JQ}" --unbuffered -r '.items[].name'            2>/dev/null | "${AWK}" 1 ORS=' '`)
-	ni_enabled=(`echo "${ni_buffer}" | "${JQ}" --unbuffered -r '.items[].enabled // true' 2>/dev/null | "${AWK}" 1 ORS=' '`)
-	ni_speed=(  `echo "${ni_buffer}" | "${JQ}" --unbuffered -r '.items[].speed // 0'      2>/dev/null | "${AWK}" 1 ORS=' '`)
+	ni_enabled=(`echo "${ni_buffer}" | "${JQ}" --unbuffered -r '.items[] | .enabled // true' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	ni_speed=(  `echo "${ni_buffer}" | "${JQ}" --unbuffered -r '.items[] | .speed // 0'      2>/dev/null | "${AWK}" 1 ORS=' '`)
 	# use while-read for fields that may be empty string (word-split would drop them and misalign the array)
 	while IFS= read -r line; do ni_addr+=(   "${line}"); done < <(echo "${ni_buffer}" | "${JQ}" --unbuffered -r '.items[] | .address  // ""' 2>/dev/null)
 	while IFS= read -r line; do ni_gw+=(     "${line}"); done < <(echo "${ni_buffer}" | "${JQ}" --unbuffered -r '.items[] | .gateway  // ""' 2>/dev/null)
@@ -3160,11 +3166,11 @@ if [[ ( -n "${enable_network}" || -n "${enable_all}" ) && -z "${disable_network}
 	declare -a pt_name pt_wwn pt_iqn pt_nqn pt_portal pt_failover
 
 	pt_name=(    `echo "${ports_buffer}" | "${JQ}" --unbuffered -r '.items[].name'              2>/dev/null | "${AWK}" 1 ORS=' '`)
-	pt_wwn=(     `echo "${ports_buffer}" | "${JQ}" --unbuffered -r '.items[].wwn // ""'         2>/dev/null | "${AWK}" 1 ORS=' '`)
-	pt_iqn=(     `echo "${ports_buffer}" | "${JQ}" --unbuffered -r '.items[].iqn // ""'         2>/dev/null | "${AWK}" 1 ORS=' '`)
-	pt_nqn=(     `echo "${ports_buffer}" | "${JQ}" --unbuffered -r '.items[].nqn // ""'         2>/dev/null | "${AWK}" 1 ORS=' '`)
-	pt_portal=(  `echo "${ports_buffer}" | "${JQ}" --unbuffered -r '.items[].portal // ""'      2>/dev/null | "${AWK}" 1 ORS=' '`)
-	pt_failover=(`echo "${ports_buffer}" | "${JQ}" --unbuffered -r '.items[].failover // ""'    2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pt_wwn=(     `echo "${ports_buffer}" | "${JQ}" --unbuffered -r '.items[] | .wwn // ""'         2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pt_iqn=(     `echo "${ports_buffer}" | "${JQ}" --unbuffered -r '.items[] | .iqn // ""'         2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pt_nqn=(     `echo "${ports_buffer}" | "${JQ}" --unbuffered -r '.items[] | .nqn // ""'         2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pt_portal=(  `echo "${ports_buffer}" | "${JQ}" --unbuffered -r '.items[] | .portal // ""'      2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pt_failover=(`echo "${ports_buffer}" | "${JQ}" --unbuffered -r '.items[] | .failover // ""'    2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	_pt_total="${#pt_name[@]}"
 
@@ -4081,11 +4087,11 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 	declare -a pod_name pod_status pod_med pod_med_addr
 
 	pod_name=(    `echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].name'                              2>/dev/null | "${AWK}" 1 ORS=' '`)
-	pod_status=(  `echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].status // "healthy"'               2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pod_status=(  `echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[] | .status // "healthy"'               2>/dev/null | "${AWK}" 1 ORS=' '`)
 	pod_med=(     `echo "${pods_buffer}" | "${JQ}" --unbuffered -r --arg arr "${array_name}" \
 	               '.items[] | (first(.arrays[] | select(.name == $arr) | .mediator_status) // .arrays[0].mediator_status // "unknown")' \
 	               2>/dev/null | "${AWK}" 1 ORS=' '`)
-	pod_med_addr=(`echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[].mediator // ""'                    2>/dev/null | "${AWK}" 1 ORS=' '`)
+	pod_med_addr=(`echo "${pods_buffer}" | "${JQ}" --unbuffered -r '.items[] | .mediator // ""'                    2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	_pod_total=0
 	_pod_unhealthy=0
@@ -4129,10 +4135,10 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 	# --- Array connections ---
 	declare -a ac_remote ac_status ac_type ac_transport
 
-	ac_remote=(   `echo "${conn_buffer}" | "${JQ}" --unbuffered -r '.items[].remote.name // .items[].id // "unknown"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
-	ac_status=(   `echo "${conn_buffer}" | "${JQ}" --unbuffered -r '.items[].status // "connected"'                   2>/dev/null | "${AWK}" 1 ORS=' '`)
-	ac_type=(     `echo "${conn_buffer}" | "${JQ}" --unbuffered -r '.items[].type // "unknown"'                       2>/dev/null | "${AWK}" 1 ORS=' '`)
-	ac_transport=(`echo "${conn_buffer}" | "${JQ}" --unbuffered -r '.items[].replication_transport // "ip"'           2>/dev/null | "${AWK}" 1 ORS=' '`)
+	ac_remote=(   `echo "${conn_buffer}" | "${JQ}" --unbuffered -r '.items[] | .remote.name // .id // "unknown"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	ac_status=(   `echo "${conn_buffer}" | "${JQ}" --unbuffered -r '.items[] | .status // "connected"'                   2>/dev/null | "${AWK}" 1 ORS=' '`)
+	ac_type=(     `echo "${conn_buffer}" | "${JQ}" --unbuffered -r '.items[] | .type // "unknown"'                       2>/dev/null | "${AWK}" 1 ORS=' '`)
+	ac_transport=(`echo "${conn_buffer}" | "${JQ}" --unbuffered -r '.items[] | .replication_transport // "ip"'           2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	_ac_total=0
 	_ac_down=0
@@ -4172,9 +4178,9 @@ if [[ ( -n "${enable_repl}" || -n "${enable_all}" ) && -z "${disable_repl}" ]]; 
 
 		while IFS= read -r line; do rl_src+=(   "${line}"); done < <(echo "${rlink_buffer}" | "${JQ}" --unbuffered -r '.items[] | (.sources // [])[0].name // (.sources // [])[0].id // "unknown"' 2>/dev/null)
 		while IFS= read -r line; do rl_dst+=(   "${line}"); done < <(echo "${rlink_buffer}" | "${JQ}" --unbuffered -r '.items[] | (.targets // [])[0].name // (.targets // [])[0].id // "unknown"' 2>/dev/null)
-		rl_status=(`echo "${rlink_buffer}" | "${JQ}" --unbuffered -r '.items[].status  // "replicating"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
-		rl_lag=(   `echo "${rlink_buffer}" | "${JQ}" --unbuffered -r '.items[].lag     // 0'             2>/dev/null | "${AWK}" 1 ORS=' '`)
-		rl_paused=(`echo "${rlink_buffer}" | "${JQ}" --unbuffered -r '.items[].paused  // false'         2>/dev/null | "${AWK}" 1 ORS=' '`)
+		rl_status=(`echo "${rlink_buffer}" | "${JQ}" --unbuffered -r '.items[] | .status  // "replicating"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+		rl_lag=(   `echo "${rlink_buffer}" | "${JQ}" --unbuffered -r '.items[] | .lag     // 0'             2>/dev/null | "${AWK}" 1 ORS=' '`)
+		rl_paused=(`echo "${rlink_buffer}" | "${JQ}" --unbuffered -r '.items[] | .paused  // false'         2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 		_rl_total=0
 		_rl_crit=0
@@ -4404,12 +4410,12 @@ if [[ ( -n "${enable_certs}" || -n "${enable_all}" ) && -z "${disable_certs}" ]]
 	declare -a cert_name cert_cn cert_type cert_issued_by cert_valid_to
 
 	cert_name=(`echo "${cert_buffer}" | "${JQ}" --unbuffered -r '.items[].name'                      2>/dev/null | "${AWK}" 1 ORS=' '`)
-	cert_cn=(  `echo "${cert_buffer}" | "${JQ}" --unbuffered -r '.items[].common_name // "n/a"'      2>/dev/null | "${AWK}" 1 ORS=' '`)
-	cert_type=(`echo "${cert_buffer}" | "${JQ}" --unbuffered -r '.items[].certificate_type // "n/a"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	cert_cn=(  `echo "${cert_buffer}" | "${JQ}" --unbuffered -r '.items[] | .common_name // "n/a"'      2>/dev/null | "${AWK}" 1 ORS=' '`)
+	cert_type=(`echo "${cert_buffer}" | "${JQ}" --unbuffered -r '.items[] | .certificate_type // "n/a"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
 	while IFS= read -r line; do cert_issued_by+=("${line}"); done < \
-		<(echo "${cert_buffer}" | "${JQ}" --unbuffered -r '.items[].issued_by // "unknown"' 2>/dev/null)
+		<(echo "${cert_buffer}" | "${JQ}" --unbuffered -r '.items[] | .issued_by // "unknown"' 2>/dev/null)
 	while IFS= read -r line; do cert_valid_to+=("${line}"); done < \
-		<(echo "${cert_buffer}" | "${JQ}" --unbuffered -r '.items[].valid_to // ""' 2>/dev/null)
+		<(echo "${cert_buffer}" | "${JQ}" --unbuffered -r '.items[] | .valid_to // ""' 2>/dev/null)
 
 	_cert_total=0
 	_cert_crit=0
@@ -4498,16 +4504,16 @@ if [[ ( -n "${enable_alerts}" || -n "${enable_all}" ) && -z "${disable_alerts}" 
 	declare -a al_comp_a al_summ_a al_kb_a
 
 	al_id=(   `echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[].id'                2>/dev/null | "${AWK}" 1 ORS=' '`)
-	al_code=( `echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[].code // 0'         2>/dev/null | "${AWK}" 1 ORS=' '`)
+	al_code=( `echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[] | .code // 0'         2>/dev/null | "${AWK}" 1 ORS=' '`)
 	al_sev=(  `echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[].severity'          2>/dev/null | "${AWK}" 1 ORS=' '`)
-	al_cat=(  `echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[].category // "n/a"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
-	al_state=(`echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[].state // "open"'   2>/dev/null | "${AWK}" 1 ORS=' '`)
+	al_cat=(  `echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[] | .category // "n/a"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	al_state=(`echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[] | .state // "open"'   2>/dev/null | "${AWK}" 1 ORS=' '`)
 	while IFS= read -r line; do al_comp_a+=("${line}"); done < \
-		<(echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[].component_name // "unknown"' 2>/dev/null)
+		<(echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[] | .component_name // "unknown"' 2>/dev/null)
 	while IFS= read -r line; do al_summ_a+=("${line}"); done < \
-		<(echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[].summary // "no summary"' 2>/dev/null)
+		<(echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[] | .summary // "no summary"' 2>/dev/null)
 	while IFS= read -r line; do al_kb_a+=("${line}"); done < \
-		<(echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[].knowledge_base_url // ""' 2>/dev/null)
+		<(echo "${alerts_buffer}" | "${JQ}" --unbuffered -r '.items[] | .knowledge_base_url // ""' 2>/dev/null)
 
 	# build blacklist map from --blacklist-alarmcode "111,112,113"
 	declare -A _al_bl_map
@@ -4606,10 +4612,10 @@ if [[ ( -n "${enable_subs}" || -n "${enable_all}" ) && -z "${disable_subs}" ]]; 
 	declare -a sub_name sub_status sub_service sub_exp sub_start
 
 	sub_name=(   `echo "${subs_buffer}" | "${JQ}" --unbuffered -r '.items[].name'              2>/dev/null | "${AWK}" 1 ORS=' '`)
-	sub_status=( `echo "${subs_buffer}" | "${JQ}" --unbuffered -r '.items[].status // "unknown"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
-	sub_exp=(    `echo "${subs_buffer}" | "${JQ}" --unbuffered -r '.items[].expiration_date // 0' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	sub_status=( `echo "${subs_buffer}" | "${JQ}" --unbuffered -r '.items[] | .status // "unknown"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	sub_exp=(    `echo "${subs_buffer}" | "${JQ}" --unbuffered -r '.items[] | .expiration_date // 0' 2>/dev/null | "${AWK}" 1 ORS=' '`)
 	while IFS= read -r line; do sub_service+=("${line}"); done < \
-		<(echo "${subs_buffer}" | "${JQ}" --unbuffered -r '.items[].service // "n/a"' 2>/dev/null)
+		<(echo "${subs_buffer}" | "${JQ}" --unbuffered -r '.items[] | .service // "n/a"' 2>/dev/null)
 
 	_sub_total=0
 	_sub_ok=0
@@ -4717,7 +4723,7 @@ if [[ ( -n "${enable_metrics}" || -n "${enable_all}" ) && -z "${disable_metrics}
 	else
 
 	_met_names_raw=(`echo "${metrics_catalog_buffer}" | "${JQ}" --unbuffered -r '.items[].name' 2>/dev/null | "${AWK}" 1 ORS=' '`)
-	_met_units_raw=(`echo "${metrics_catalog_buffer}" | "${JQ}" --unbuffered -r '.items[].unit // "none"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
+	_met_units_raw=(`echo "${metrics_catalog_buffer}" | "${JQ}" --unbuffered -r '.items[] | .unit // "none"' 2>/dev/null | "${AWK}" 1 ORS=' '`)
 
 	_met_total="${#_met_names_raw[@]}"
 
